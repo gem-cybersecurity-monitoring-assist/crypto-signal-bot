@@ -412,7 +412,7 @@ async function handlePaperIntent(
   // The authenticated dashboard must pass the same server-side risk gate as
   // the public read-only risk panel. All inputs are fetched from the Worker;
   // browser-provided prices are intentionally discarded by normalizePaperIntent.
-  const origin = url.origin
+  const origin = new URL(request.url).origin
   const symbol = String(normalized.symbol)
   const [signal, guardian, portfolio, market] = await Promise.all([
     workerJson(origin, `/signal/latest?symbol=${encodeURIComponent(symbol)}`, env, ctx),
