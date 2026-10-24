@@ -16,6 +16,7 @@
 
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
+import { evaluatePaperIntentRisk } from './paper-intent-risk'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -878,6 +879,75 @@ app.get('/exchange/circuit-breakers', async (c) => {
   }
   return c.json({ adapters, count: adapters.length, ts: ts() })
 })
+
+// ── PAPER INTENT (risk-gated dashboard entry point) ───────────────────────────
+app.post('/intent/paper', async (c) => {
+  const input = await c.req.json().catch(() => ({})) as OrderInput;
+  const symbol = sym(input.symbol);
+  const side = String(input.side ?? '').toUpperCase();
+  if (side !== 'BUY' && side !== 'SELL') {
+    return c.json({ error: 'Invalid side — must be BUY or SELL', code: 'INVALID_SIDE', ...safeRuntime(c.env) }, 400);
+  }
+
+  // Never trust a browser-supplied fill price. Resolve a fresh market price and
+  // let the paper engine calculate quantity/notional from that server price.
+  const market = await resolvePrice(c.env, symbol);
+  if (market.stale || !Number.isFinite(market.price) || market.price <= 0) {
+    return c.json({ error: 'Fresh market price unavailable; paper intent rejected.', code: 'PRICE_UNAVAILABLE', ...safeRuntime(c.env) }, 503);
+  }
+
+  const quantity = n(input.quantity ?? input.qty);
+  const suppliedNotional = n(input.notional_usdt ?? input.amount);
+  const requestedNotional = suppliedNotional > 0 ? suppliedNotional : quantity > 0 ? quantity * market.price : 0;
+
+  // A Buy entry requires a current BUY signal. A Sell is close-only; the paper
+  // engine rejects it if no matching open position exists.
+  const storedSignal = await c.env.DB.prepare(
+    'SELECT side FROM signals WHERE symbol = ? ORDER BY created_at DESC LIMIT 1'
+  ).bind(symbol).first<{ side: string }>().catch(() => null);
+  let signalSide = String(storedSignal?.side ?? 'HOLD').toUpperCase();
+  if (!storedSignal) {
+    const history = await c.env.DB.prepare(
+      'SELECT price FROM market_snapshots WHERE symbol = ? ORDER BY created_at DESC LIMIT 20'
+    ).bind(symbol).all<{ price: number }>().catch(() => ({ results: [] as { price: number }[] }));
+    const prices = (history.results ?? []).map(row => n(row.price)).filter(price => price > 0);
+    if (prices.length >= 5) {
+      const emaFast = prices.slice(0, 3).reduce((sum, value) => sum + value, 0) / 3;
+      const emaSlow = prices.reduce((sum, value) => sum + value, 0) / prices.length;
+      if (emaFast > emaSlow * 1.002) signalSide = 'BUY';
+      else if (emaFast < emaSlow * 0.998) signalSide = 'SELL';
+    }
+  }
+
+  const guardian = await getGuardian(c.env);
+  const portfolio = await getPortfolio(c.env);
+  const risk = evaluatePaperIntentRisk({
+    side,
+    signalSide,
+    guardianHalted: bool(guardian.triggered),
+    drawdownPct: n(guardian.drawdown_pct),
+    positionCount: n(portfolio.position_count),
+    equityUsdt: n(portfolio.equity_usdt),
+    requestedNotionalUsdt: requestedNotional,
+  });
+  if (!risk.approved) {
+    await audit(c.env, 'paper_intent_risk_rejected', {
+      symbol, side, signal_side: signalSide, requested_notional_usdt: requestedNotional,
+      risk_score: risk.risk_score, reasoning: risk.reasoning,
+    });
+    return c.json({ error: risk.reasoning, code: 'RISK_REJECTED', risk_decision: risk, ...safeRuntime(c.env) }, 403);
+  }
+
+  const safeInput: OrderInput = { ...input, symbol, side, price: undefined };
+  if (side === 'BUY') {
+    safeInput.quantity = undefined;
+    safeInput.qty = undefined;
+    safeInput.amount = undefined;
+    safeInput.notional_usdt = requestedNotional;
+  }
+  const result = await placePaperOrder(c.env, safeInput);
+  return c.json({ ...result.body, risk_decision: risk }, result.status);
+});
 
 // ── ORDERS ────────────────────────────────────────────────────────────────────
 
