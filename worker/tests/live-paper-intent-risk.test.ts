@@ -8,6 +8,7 @@ const base = {
   signalSide: "BUY",
   guardianHalted: false,
   drawdownPct: 0,
+  maxDrawdownPct: 15,
   positionCount: 0,
   equityUsdt: 10_000,
   requestedNotionalUsdt: 200,
@@ -33,6 +34,7 @@ test("blocks a Buy above the server-calculated paper cap", () => {
 test("blocks every intent when Guardian is halted or the risk score reaches the threshold", () => {
   assert.equal(evaluatePaperIntentRisk({ ...base, guardianHalted: true }).approved, false);
   assert.equal(evaluatePaperIntentRisk({ ...base, drawdownPct: 20 }).approved, false);
+  assert.equal(evaluatePaperIntentRisk({ ...base, drawdownPct: 15 }).approved, false);
 });
 
 test("allows risk-approved Sell-to-close intents without applying the entry-size cap", () => {
