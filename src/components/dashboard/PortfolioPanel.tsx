@@ -53,7 +53,7 @@ function QuickTrade({ symbol, signal, risk, price, positionQuantity, tradingMode
     setSubmitting(true);
     try {
       const notional = risk.positionNotionalUsdt;
-      if (side === 'BUY' && (!Number.isFinite(notional) || notional <= 0)) {
+      if (side === 'BUY' && (typeof notional !== 'number' || !Number.isFinite(notional) || notional <= 0)) {
         throw new Error('The server risk decision did not authorize a paper order size.');
       }
       await fetchBackendJson('/intent/paper', {
@@ -159,6 +159,7 @@ export function PortfolioPanel({
     );
   }
 
+  const selectedAsset = selectedSymbol.toUpperCase().replace(/[-/](USDT|USD)$/i, '').replace(/(USDT|USD)$/i, '').trim();
   const usdt = portfolio?.balances?.USDT ?? 0;
   const nonUsdtBalances = Object.entries(portfolio?.balances ?? {}).filter(
     ([k, v]) => k !== 'USDT' && v > 0
@@ -260,7 +261,7 @@ export function PortfolioPanel({
         signal={signal ?? null}
         risk={risk ?? null}
         price={selectedPrice}
-        positionQuantity={portfolio?.positions?.[selectedSymbol] ?? 0}
+        positionQuantity={portfolio?.positions?.[selectedAsset] ?? 0}
         tradingMode={tradingMode}
         onFilled={() => onActionComplete?.()}
       />
