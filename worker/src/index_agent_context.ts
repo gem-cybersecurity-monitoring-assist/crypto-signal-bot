@@ -3,6 +3,7 @@ import {
   handleAgentContextRequest,
   type AgentContextEnv,
 } from './agent-context'
+import { PAPER_BALANCE_SEED_SQL } from './paper-balance-seed'
 
 type RuntimeEnv = AgentContextEnv & {
   EXECUTION_EXCHANGE_PRIMARY?: string
@@ -76,8 +77,7 @@ const PAPER_SCHEMA_STATEMENTS = [
   )`,
   `INSERT OR IGNORE INTO guardian_state (id, triggered, reason, error_count, drawdown_pct)
     VALUES (1, 0, NULL, 0, 0.0)`,
-  `INSERT OR IGNORE INTO portfolio (symbol, side, quantity, entry_price, current_price, pnl, status)
-    VALUES ('USDT', 'balance', 10000, 1.0, 1.0, 0, 'balance')`,
+  PAPER_BALANCE_SEED_SQL,
   `INSERT OR IGNORE INTO circuit_breaker_state (source, open, fail_count) VALUES ('btcc', 0, 0)`,
   `INSERT OR IGNORE INTO circuit_breaker_state (source, open, fail_count) VALUES ('bitget', 0, 0)`,
   `INSERT OR IGNORE INTO circuit_breaker_state (source, open, fail_count) VALUES ('coinbase', 0, 0)`,

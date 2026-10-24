@@ -107,7 +107,7 @@ async function getPrice(env: Env, raw?: string | null) {
 }
 
 async function getBalance(env: Env) {
-  const row = await env.DB.prepare("SELECT quantity FROM portfolio WHERE symbol = 'USDT' AND status = 'balance' LIMIT 1")
+  const row = await env.DB.prepare("SELECT quantity FROM portfolio WHERE symbol = 'USDT' AND status = 'balance' ORDER BY id ASC LIMIT 1")
     .first<{ quantity: number }>()
     .catch(() => null)
   if (row?.quantity !== undefined) return n(row.quantity, 10000)
@@ -120,7 +120,7 @@ async function getBalance(env: Env) {
 }
 
 async function setBalance(env: Env, value: number) {
-  const row = await env.DB.prepare("SELECT id FROM portfolio WHERE symbol = 'USDT' AND status = 'balance' LIMIT 1")
+  const row = await env.DB.prepare("SELECT id FROM portfolio WHERE symbol = 'USDT' AND status = 'balance' ORDER BY id ASC LIMIT 1")
     .first<{ id: number }>()
     .catch(() => null)
   if (row?.id) await env.DB.prepare('UPDATE portfolio SET quantity = ? WHERE id = ?').bind(value, row.id).run()
