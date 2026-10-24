@@ -454,6 +454,7 @@ async function handlePaperIntent(
     signalSide,
     guardianHalted: guardian.body?.triggered === true || guardian.body?.triggered === 1 || guardian.body?.guardian_triggered === true,
     drawdownPct: numberOr(guardian.body?.drawdown_pct, 0),
+    maxDrawdownPct: numberOr(guardian.body?.max_drawdown_pct, 15),
     positionCount,
     equityUsdt: equity,
     requestedNotionalUsdt: requestedNotional,
