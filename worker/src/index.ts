@@ -324,7 +324,7 @@ async function isHaltedForMutation(env: Env): Promise<boolean> {
 
 async function getBalance(env: Env): Promise<number> {
   const row = await env.DB.prepare(
-    "SELECT id, quantity FROM portfolio WHERE symbol = 'USDT' AND status = 'balance' LIMIT 1"
+    "SELECT id, quantity FROM portfolio WHERE symbol = 'USDT' AND status = 'balance' ORDER BY id ASC LIMIT 1"
   ).first<{ id: number; quantity: number }>().catch(() => null)
   if (row?.quantity !== undefined) return n(row.quantity, 10000)
   const starting = n(env.PAPER_STARTING_BALANCE_USDT, 10000)
@@ -336,7 +336,7 @@ async function getBalance(env: Env): Promise<number> {
 
 async function setBalance(env: Env, value: number): Promise<void> {
   const row = await env.DB.prepare(
-    "SELECT id FROM portfolio WHERE symbol = 'USDT' AND status = 'balance' LIMIT 1"
+    "SELECT id FROM portfolio WHERE symbol = 'USDT' AND status = 'balance' ORDER BY id ASC LIMIT 1"
   ).first<{ id: number }>().catch(() => null)
   if (row?.id) {
     await env.DB.prepare('UPDATE portfolio SET quantity = ? WHERE id = ?').bind(value, row.id).run()

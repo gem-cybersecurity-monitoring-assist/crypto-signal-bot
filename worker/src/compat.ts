@@ -79,7 +79,7 @@ async function getPrice(env: Env, value?: string | null): Promise<PriceSnapshot>
 }
 
 async function getBalance(env: Env) {
-  const row = await env.DB.prepare("SELECT quantity FROM portfolio WHERE symbol = 'USDT' AND status = 'balance' LIMIT 1").first<{ quantity: number }>().catch(() => null)
+  const row = await env.DB.prepare("SELECT quantity FROM portfolio WHERE symbol = 'USDT' AND status = 'balance' ORDER BY id ASC LIMIT 1").first<{ quantity: number }>().catch(() => null)
   if (row?.quantity !== undefined) return n(row.quantity, 10000)
   const starting = n(env.PAPER_STARTING_BALANCE_USDT, 10000)
   await env.DB.prepare("INSERT INTO portfolio (symbol, side, quantity, entry_price, current_price, pnl, status) VALUES ('USDT', 'balance', ?, 1, 1, 0, 'balance')").bind(starting).run().catch(() => undefined)
@@ -87,7 +87,7 @@ async function getBalance(env: Env) {
 }
 
 async function setBalance(env: Env, value: number) {
-  const row = await env.DB.prepare("SELECT id FROM portfolio WHERE symbol = 'USDT' AND status = 'balance' LIMIT 1").first<{ id: number }>().catch(() => null)
+  const row = await env.DB.prepare("SELECT id FROM portfolio WHERE symbol = 'USDT' AND status = 'balance' ORDER BY id ASC LIMIT 1").first<{ id: number }>().catch(() => null)
   if (row?.id) await env.DB.prepare('UPDATE portfolio SET quantity = ? WHERE id = ?').bind(value, row.id).run()
   else await env.DB.prepare("INSERT INTO portfolio (symbol, side, quantity, entry_price, current_price, pnl, status) VALUES ('USDT', 'balance', ?, 1, 1, 0, 'balance')").bind(value).run()
 }
