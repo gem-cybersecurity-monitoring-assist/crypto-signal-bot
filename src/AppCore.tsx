@@ -19,6 +19,7 @@ const NotFound = lazy(() => import('./pages/NotFound'));
 const OperatorReadiness = lazy(() => import('./pages/OperatorReadiness'));
 const Portfolio = lazy(() => import('./pages/Portfolio'));
 const ProductionStatus = lazy(() => import('./pages/ProductionStatus'));
+const DashboardDemo = lazy(() => import('./pages/DashboardDemo'));
 const PublicHome = lazy(() => import('./pages/PublicHome'));
 const ResetPassword = lazy(() => import('./pages/ResetPassword'));
 const Settings = lazy(() => import('./pages/Settings'));
@@ -151,6 +152,7 @@ export default function AppCore() {
             <Route path="/reset-password" element={<ResetPassword />} />
             <Route path="/waitlist" element={<Waitlist />} />
             <Route path="/status" element={<ProductionStatus />} />
+            <Route path="/demo" element={<DashboardDemo />} />
             <Route path="/dashboard" element={<DashboardPage><Index /></DashboardPage>} />
             <Route path="/backtest" element={<ProtectedPage><Backtest /></ProtectedPage>} />
             <Route path="/portfolio" element={<ProtectedPage><Portfolio /></ProtectedPage>} />
