@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   Activity, ArrowLeft, ArrowRight, AudioLines, CheckCircle2, CirclePlay,
   Clock3, Gauge, Pause, Play, RotateCcw, ShieldCheck, SkipBack, SkipForward,
-  Wallet, X, XCircle,
+  Wallet, X,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
