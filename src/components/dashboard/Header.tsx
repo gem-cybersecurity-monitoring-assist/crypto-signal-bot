@@ -2,6 +2,7 @@ import { useState } from 'react';
 import {
   Activity,
   CheckCircle2,
+  CirclePlay,
   Loader2,
   LogOut,
   Settings,
@@ -386,6 +387,16 @@ export function Header({
               <span className="hidden lg:inline">
                 {paperTradeTest.running ? 'Paper trade…' : 'Test Paper Trade'}
               </span>
+            </Button>
+
+            <Button
+              variant="outline"
+              onClick={() => navigate('/demo')}
+              className="h-9 gap-2 border-primary/40 bg-primary/10 px-3 text-primary hover:bg-primary/15"
+              title="Open narrated dashboard demo"
+            >
+              <CirclePlay className="h-4 w-4" />
+              <span className="hidden md:inline">Demo</span>
             </Button>
 
             <Button
