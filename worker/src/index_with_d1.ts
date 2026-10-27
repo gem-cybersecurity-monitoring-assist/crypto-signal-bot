@@ -52,6 +52,23 @@ function numberOr(value: unknown, fallback = 0): number {
   return Number.isFinite(parsed) ? parsed : fallback
 }
 
+async function workerJson(
+  origin: string,
+  path: string,
+  env: AgentEnv,
+  ctx: ExecutionContext,
+  init?: RequestInit,
+): Promise<{ response: Response; body: Record<string, unknown> | null }> {
+  const response = await worker.fetch(new Request(`${origin}${path}`, init), env, ctx)
+  const body = await response.clone().json().catch(() => null) as Record<string, unknown> | null
+  return { response, body }
+}
+
+function finiteNumber(value: unknown): number | null {
+  const parsed = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
 function isSelectOnly(sql: string): boolean {
   const stripped = sql
     .replace(/--[^\n]*/g, ' ')
