@@ -110,10 +110,14 @@ for (const [configName, config] of configs) {
 }
 
 for (const sourcePath of sourceFiles('worker/src')) {
-  if (sourcePath === modulePath) continue
+  // path.join uses backslashes on Windows; normalize before comparing against
+  // the repository-relative allowlist so this safety gate behaves identically
+  // on Windows and POSIX CI runners.
+  const normalizedSourcePath = sourcePath.split(path.sep).join('/')
+  if (normalizedSourcePath === modulePath) continue
   const content = read(sourcePath)
-  if (/demo-write-transport\.ts/.test(content) && !allowedSourceImporters.has(sourcePath)) {
-    failures.push(`${sourcePath} must not import the isolated demo write transport`)
+  if (/demo-write-transport\.ts/.test(content) && !allowedSourceImporters.has(normalizedSourcePath)) {
+    failures.push(`${normalizedSourcePath} must not import the isolated demo write transport`)
   }
 }
 

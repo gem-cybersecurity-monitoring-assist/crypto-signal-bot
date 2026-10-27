@@ -22,38 +22,49 @@ interface QuickTradeProps {
   signal: Signal | null;
   risk: RiskAssessment | null;
   price: number;
+  positionQuantity: number;
   tradingMode: string;
   onFilled: () => void;
 }
 
-function QuickTrade({ symbol, signal, risk, price, tradingMode, onFilled }: QuickTradeProps) {
+function QuickTrade({ symbol, signal, risk, price, positionQuantity, tradingMode, onFilled }: QuickTradeProps) {
   const [submitting, setSubmitting] = useState(false);
-
-  const canTrade = signal && risk && risk.approved && risk.positionSize > 0 && price > 0;
+  const side = signal?.direction === 'DOWN' ? 'SELL' : 'BUY';
+  const canTrade = Boolean(
+    signal &&
+    signal.direction !== 'NEUTRAL' &&
+    risk &&
+    risk.approved &&
+    risk.positionSize > 0 &&
+    price > 0 &&
+    (side === 'BUY' || positionQuantity > 0)
+  );
 
   const handleTrade = async (side: 'BUY' | 'SELL') => {
-    if (!risk) return;
+    if (!risk || !canTrade) return;
     if (tradingMode === 'live') {
       toast.error('Live execution is disabled. Certification rehearsal is the only enabled execution path.');
       return;
     }
+    if (side === 'SELL' && positionQuantity <= 0) {
+      toast.error('There is no open paper position to close for this asset.');
+      return;
+    }
     setSubmitting(true);
     try {
-      // Sizing authority is the Worker's risk decision (positionNotionalUsdt).
-      // The legacy fraction-of-1000 fallback only applies if an older Worker
-      // response carries no notional.
-      const notional = risk.positionNotionalUsdt && risk.positionNotionalUsdt > 0
-        ? risk.positionNotionalUsdt
-        : risk.positionSize * 1000;
-      const qty = price > 0 ? Number((notional / price).toFixed(6)) : 0.001;
+      const notional = risk.positionNotionalUsdt;
+      if (side === 'BUY' && (typeof notional !== 'number' || !Number.isFinite(notional) || notional <= 0)) {
+        throw new Error('The server risk decision did not authorize a paper order size.');
+      }
       await fetchBackendJson('/intent/paper', {
         method: 'POST',
         body: JSON.stringify({
           symbol: `${symbol}USDT`,
           side,
           order_type: 'MARKET',
-          quantity: Math.max(qty, 0.0001),
-          price,
+          ...(side === 'BUY'
+            ? { notional_usdt: notional }
+            : { quantity: positionQuantity }),
         }),
       });
       toast.success(`CERTIFICATION ${side} recorded for ${symbol}`);
@@ -64,8 +75,6 @@ function QuickTrade({ symbol, signal, risk, price, tradingMode, onFilled }: Quic
       setSubmitting(false);
     }
   };
-
-  const side = signal?.direction === 'DOWN' ? 'SELL' : 'BUY';
 
   return (
     <div className="flex gap-2 mt-3 pt-3 border-t border-border/50">
@@ -150,6 +159,7 @@ export function PortfolioPanel({
     );
   }
 
+  const selectedAsset = selectedSymbol.toUpperCase().replace(/[-/](USDT|USD)$/i, '').replace(/(USDT|USD)$/i, '').trim();
   const usdt = portfolio?.balances?.USDT ?? 0;
   const nonUsdtBalances = Object.entries(portfolio?.balances ?? {}).filter(
     ([k, v]) => k !== 'USDT' && v > 0
@@ -251,6 +261,7 @@ export function PortfolioPanel({
         signal={signal ?? null}
         risk={risk ?? null}
         price={selectedPrice}
+        positionQuantity={portfolio?.positions?.[selectedAsset] ?? 0}
         tradingMode={tradingMode}
         onFilled={() => onActionComplete?.()}
       />

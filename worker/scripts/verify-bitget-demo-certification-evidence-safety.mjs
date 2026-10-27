@@ -104,9 +104,11 @@ for (const pattern of [
 }
 
 for (const sourcePath of sourceFiles('worker/src')) {
-  if (sourcePath === storePath || sourcePath === runnerPath) continue
+  // Normalize Windows path separators before repository-relative allowlist comparisons.
+  const normalizedSourcePath = sourcePath.split(path.sep).join('/')
+  if (normalizedSourcePath === storePath || normalizedSourcePath === runnerPath) continue
   if (/demo-certification-evidence-store\.ts/.test(read(sourcePath))) {
-    failures.push(`${sourcePath} must not import source-only Bitget certification evidence`)
+    failures.push(`${normalizedSourcePath} must not import source-only Bitget certification evidence`)
   }
 }
 

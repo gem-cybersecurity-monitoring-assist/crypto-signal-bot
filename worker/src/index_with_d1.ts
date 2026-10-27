@@ -1,4 +1,5 @@
 import worker, { requireApiKey, checkRateLimit, type Env } from './index'
+import { evaluatePaperIntentRisk } from './paper-intent-risk'
 import { fastPathDecisionMetrics, fastPathFeedRegistry } from './fast-path'
 import { buildV2InfrastructureStatus } from './routes/v2-infrastructure'
 import { buildV2MarketFeedsStatus } from './routes/v2-market-feeds'
@@ -49,6 +50,23 @@ type PaperIntentInput = {
 function numberOr(value: unknown, fallback = 0): number {
   const parsed = typeof value === 'number' ? value : Number.parseFloat(String(value ?? ''))
   return Number.isFinite(parsed) ? parsed : fallback
+}
+
+async function workerJson(
+  origin: string,
+  path: string,
+  env: AgentEnv,
+  ctx: ExecutionContext,
+  init?: RequestInit,
+): Promise<{ response: Response; body: Record<string, unknown> | null }> {
+  const response = await worker.fetch(new Request(`${origin}${path}`, init), env, ctx)
+  const body = await response.clone().json().catch(() => null) as Record<string, unknown> | null
+  return { response, body }
+}
+
+function finiteNumber(value: unknown): number | null {
+  const parsed = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(parsed) ? parsed : null
 }
 
 function isSelectOnly(sql: string): boolean {
@@ -408,6 +426,69 @@ async function handlePaperIntent(
     }, 400)
   }
 
+  // The authenticated dashboard must pass the same server-side risk gate as
+  // the public read-only risk panel. All inputs are fetched from the Worker;
+  // browser-provided prices are intentionally discarded by normalizePaperIntent.
+  const origin = new URL(request.url).origin
+  const symbol = String(normalized.symbol)
+  const [signal, guardian, portfolio, market] = await Promise.all([
+    workerJson(origin, `/signal/latest?symbol=${encodeURIComponent(symbol)}`, env, ctx),
+    workerJson(origin, '/guardian/status', env, ctx),
+    workerJson(origin, '/portfolio/summary', env, ctx),
+    workerJson(origin, `/market/price/${encodeURIComponent(symbol)}`, env, ctx),
+  ])
+  const marketPrice = finiteNumber(market.body?.price)
+  const equity = finiteNumber(portfolio.body?.equity_usdt ?? portfolio.body?.cash_usdt ?? portfolio.body?.balance_usdt)
+  const positionCount = finiteNumber(
+    portfolio.body?.position_count
+      ?? (Array.isArray(portfolio.body?.open_positions) ? portfolio.body.open_positions.length : undefined)
+      ?? (Array.isArray(portfolio.body?.positions) ? portfolio.body.positions.length : 0),
+  )
+  if (
+    !signal.response.ok
+    || !guardian.response.ok
+    || !portfolio.response.ok
+    || !market.response.ok
+    || marketPrice === null
+    || marketPrice <= 0
+    || market.body?.stale === true
+    || equity === null
+    || positionCount === null
+  ) {
+    return jsonResponse(request, env, {
+      error: 'Risk-gate dependencies are unavailable; paper intent rejected closed.',
+      code: 'RISK_DEPENDENCY_UNAVAILABLE',
+      request_id: requestId(request),
+    }, 503)
+  }
+
+  const side = String(normalized.side).toUpperCase()
+  const requestedNotional = numberOr(normalized.notional_usdt, 0)
+    || numberOr(normalized.quantity, 0) * marketPrice
+  const signalSide = String(signal.body?.side ?? signal.body?.action ?? signal.body?.signal ?? 'HOLD').toUpperCase()
+  const risk = evaluatePaperIntentRisk({
+    side,
+    signalSide,
+    guardianHalted: guardian.body?.triggered === true || guardian.body?.triggered === 1 || guardian.body?.guardian_triggered === true,
+    drawdownPct: numberOr(guardian.body?.drawdown_pct, 0),
+    maxDrawdownPct: numberOr(guardian.body?.max_drawdown_pct, 15),
+    positionCount,
+    equityUsdt: equity,
+    requestedNotionalUsdt: requestedNotional,
+  })
+  if (!risk.approved) {
+    return jsonResponse(request, env, {
+      error: risk.reasoning,
+      code: 'RISK_REJECTED',
+      risk_decision: risk,
+      request_id: requestId(request),
+    }, 403)
+  }
+
+  const safeNormalized = side === 'BUY'
+    ? { ...normalized, quantity: undefined, notional_usdt: requestedNotional }
+    : normalized
+
   const headers = new Headers({
     Accept: 'application/json',
     'Content-Type': 'application/json',
@@ -420,7 +501,7 @@ async function handlePaperIntent(
   const internalRequest = new Request(new URL('/orders', request.url), {
     method: 'POST',
     headers,
-    body: JSON.stringify(normalized),
+    body: JSON.stringify(safeNormalized),
   })
   const response = await worker.fetch(internalRequest, env, ctx)
   const payload = await response.clone().json().catch(() => null) as Record<string, unknown> | null
@@ -429,6 +510,7 @@ async function handlePaperIntent(
 
   return jsonResponse(request, env, {
     ...(payload ?? { error: 'Paper execution returned an invalid response.' }),
+    risk_decision: risk,
     certification_mode: true,
     provider_mutation_enabled: false,
     real_funds_enabled: false,
