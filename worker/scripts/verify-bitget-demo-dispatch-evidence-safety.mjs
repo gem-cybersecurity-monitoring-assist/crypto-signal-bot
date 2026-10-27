@@ -118,16 +118,20 @@ for (const pattern of [
 }
 
 for (const sourcePath of sourceFiles('worker/src')) {
-  if (sourcePath === storePath || allowedSourceImporters.has(sourcePath)) continue
+  // Normalize Windows path separators before repository-relative allowlist comparisons.
+  const normalizedSourcePath = sourcePath.split(path.sep).join('/')
+  if (normalizedSourcePath === storePath || allowedSourceImporters.has(normalizedSourcePath)) continue
   if (/demo-dispatch-evidence-store\.ts|demo-dispatch-orchestrator\.ts/.test(read(sourcePath))) {
-    failures.push(`${sourcePath} must not import source-only Bitget demo dispatch evidence`)
+    failures.push(`${normalizedSourcePath} must not import source-only Bitget demo dispatch evidence`)
   }
 }
 
 for (const sourcePath of sourceFiles('worker/src')) {
-  if (sourcePath === storePath) continue
-  if (/demo-dispatch-evidence-store\.ts/.test(read(sourcePath)) && !allowedSourceImporters.has(sourcePath)) {
-    failures.push(`${sourcePath} is not an approved source-only evidence-store importer`)
+  // Normalize Windows path separators before repository-relative allowlist comparisons.
+  const normalizedSourcePath = sourcePath.split(path.sep).join('/')
+  if (normalizedSourcePath === storePath) continue
+  if (/demo-dispatch-evidence-store\.ts/.test(read(sourcePath)) && !allowedSourceImporters.has(normalizedSourcePath)) {
+    failures.push(`${normalizedSourcePath} is not an approved source-only evidence-store importer`)
   }
 }
 
