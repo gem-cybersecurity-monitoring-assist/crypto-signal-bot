@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { Header } from '@/components/dashboard/Header';
+import { RuntimeStatusStrip } from '@/components/dashboard/RuntimeStatusStrip';
 import { AIInsightCard } from '@/components/dashboard/AIInsightCard';
 import { AuditTrailPanel } from '@/components/dashboard/AuditTrailPanel';
 import { EarningsPanel } from '@/components/dashboard/EarningsPanel';
@@ -427,6 +428,15 @@ const Index = () => {
       />
 
       <main className="container mx-auto space-y-6 p-4 lg:space-y-8 lg:p-6">
+        <RuntimeStatusStrip
+          backendConnected={isConnected}
+          websocketConnected={wsConnected}
+          mode={systemMode}
+          guardianState={guardianState}
+          guardianHalted={Boolean(guardian?.kill_switch_active || health?.kill_switch_active)}
+          marketDataLabel={marketDataLabel}
+          riskLabel={riskLabel}
+        />
         {error && !isConnected && (
           <div className="cyber-card p-3 border-border/40 bg-muted/20">
             <p className="text-muted-foreground font-mono text-xs">⚠ Price data: {error} — retrying…</p>
