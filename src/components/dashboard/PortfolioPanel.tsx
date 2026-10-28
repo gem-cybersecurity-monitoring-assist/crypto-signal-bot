@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Wallet, TrendingUp, TrendingDown, ArrowUpDown, RefreshCw, Landmark } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-import { fetchBackendJson } from '@/lib/backend';
+import { describePaperExecutionError, fetchBackendJson } from '@/lib/backend';
 import { toast } from 'sonner';
 import type { PortfolioState, PaperOrder } from '@/hooks/usePortfolio';
 import { Signal, RiskAssessment } from '@/types/crypto';
@@ -70,7 +70,7 @@ function QuickTrade({ symbol, signal, risk, price, positionQuantity, tradingMode
       toast.success(`CERTIFICATION ${side} recorded for ${symbol}`);
       onFilled();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Trade failed');
+      toast.error(describePaperExecutionError(err, 'Trade failed'));
     } finally {
       setSubmitting(false);
     }

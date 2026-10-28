@@ -1,5 +1,6 @@
 import worker, { requireApiKey, checkRateLimit, type Env } from './index'
 import { evaluatePaperIntentRisk } from './paper-intent-risk'
+import { evaluatePaperTraderAccess } from './paper-trader-access'
 import { fastPathDecisionMetrics, fastPathFeedRegistry } from './fast-path'
 import { buildV2InfrastructureStatus } from './routes/v2-infrastructure'
 import { buildV2MarketFeedsStatus } from './routes/v2-market-feeds'
@@ -289,36 +290,21 @@ async function authenticatePaperTrader(
     }
   }
 
-  const actorId = typeof payload?.profile?.actor_id === 'string' ? payload.profile.actor_id : ''
-  const active = payload?.access_allowed === true && payload?.profile?.status === 'ACTIVE'
-  if (!actorId || !active) {
+  const access = evaluatePaperTraderAccess(payload)
+  if (!access.allowed) {
     return {
       response: jsonResponse(request, env, {
-        error: 'The authenticated account is not active.',
-        code: 'ACCOUNT_INACTIVE',
+        error: access.error,
+        code: access.code,
+        ...(access.code === 'TRADER_ROLE_REQUIRED'
+          ? { required_role: 'TRADER', required_scope: { type: 'GLOBAL', key: 'global' } }
+          : {}),
         request_id: payload?.request_id ?? requestId(request),
-      }, 403),
+      }, access.status),
     }
   }
 
-  const hasGlobalTrader = (payload?.roles ?? []).some((role) => (
-    role.role === 'TRADER'
-    && role.scope_type === 'GLOBAL'
-    && role.scope_key === 'global'
-  ))
-  if (!hasGlobalTrader) {
-    return {
-      response: jsonResponse(request, env, {
-        error: 'A current GLOBAL TRADER role is required for paper execution.',
-        code: 'TRADER_ROLE_REQUIRED',
-        required_role: 'TRADER',
-        required_scope: { type: 'GLOBAL', key: 'global' },
-        request_id: payload?.request_id ?? requestId(request),
-      }, 403),
-    }
-  }
-
-  return { actorId }
+  return { actorId: access.actorId }
 }
 
 function normalizePaperIntent(input: PaperIntentInput): Record<string, unknown> | null {
