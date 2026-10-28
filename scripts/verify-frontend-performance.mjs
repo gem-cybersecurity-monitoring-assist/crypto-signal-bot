@@ -6,6 +6,7 @@ const here = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(here, '..')
 const manifestPath = path.join(root, 'dist', '.vite', 'manifest.json')
 const appCorePath = path.join(root, 'src', 'AppCore.tsx')
+const dashboardPath = path.join(root, 'src', 'pages', 'Index.tsx')
 const maxEntryBytes = 300 * 1024
 const maxRouteChunkBytes = 600 * 1024
 
@@ -42,6 +43,10 @@ for (const record of dynamicEntries) {
 }
 
 const appCore = fs.readFileSync(appCorePath, 'utf8')
+const dashboard = fs.readFileSync(dashboardPath, 'utf8')
+if (!dashboard.includes("lazy(() =>") || !dashboard.includes("import('@/components/dashboard/PriceChart')")) {
+  throw new Error('dashboard price chart must remain lazy-loaded to keep the route chunk small')
+}
 if (/^import\s+.*\s+from\s+['"]\.\/pages\//m.test(appCore)) {
   throw new Error('AppCore must not eagerly import route pages')
 }
