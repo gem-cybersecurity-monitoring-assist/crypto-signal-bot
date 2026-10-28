@@ -425,16 +425,20 @@ async function upsertProfile(env: ManagementEnv, identity: Identity): Promise<Pr
   return profile
 }
 
-async function loadRoles(env: ManagementEnv, actorId: string): Promise<RoleRow[]> {
-  const now = nowIso()
-  const result = await env.DB.prepare(`
+// Current grants only: revoked and expired rows never authorize anything.
+// Bind parameters: actor_id, then the current ISO-8601 time.
+export const CURRENT_ROLES_SQL = `
     SELECT actor_id, role, scope_type, scope_key, granted_by, granted_at, expires_at, revoked_at
       FROM live_actor_roles
      WHERE actor_id = ?
        AND revoked_at IS NULL
        AND (expires_at IS NULL OR expires_at > ?)
      ORDER BY role ASC, scope_type ASC, scope_key ASC
-  `).bind(actorId, now).all<RoleRow>()
+  `
+
+async function loadRoles(env: ManagementEnv, actorId: string): Promise<RoleRow[]> {
+  const now = nowIso()
+  const result = await env.DB.prepare(CURRENT_ROLES_SQL).bind(actorId, now).all<RoleRow>()
   return result.results ?? []
 }
 

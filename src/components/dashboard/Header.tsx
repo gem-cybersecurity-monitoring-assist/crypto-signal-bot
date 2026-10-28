@@ -15,7 +15,7 @@ import { Button } from '@/components/ui/button';
 import { useAuth, isSupabaseConfigured as SUPABASE_CONFIGURED } from '@/context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
-import { fetchBackendJson } from '@/lib/backend';
+import { describePaperExecutionError, fetchBackendJson } from '@/lib/backend';
 import { PAPER_DASHBOARD_ROUTES } from '@/lib/paperDashboardRoutes';
 
 interface HeaderProps {
@@ -262,7 +262,7 @@ export function Header({
 
       toast.success(`Paper BTC test filled for ${currencyFormatter.format(actualNotional)} from the demo wallet.`);
     } catch (cause) {
-      const message = cause instanceof Error ? cause.message : 'Paper trade test failed.';
+      const message = describePaperExecutionError(cause, 'Paper trade test failed.');
       setPaperTradeTest({
         running: false,
         ranAt: new Date().toISOString(),

@@ -10,12 +10,31 @@ type BackendRequestInit = RequestInit & {
 
 export class FrontendBackendError extends Error {
   readonly status?: number;
+  readonly code?: string;
 
-  constructor(message: string, status?: number) {
+  constructor(message: string, status?: number, code?: string) {
     super(message);
     this.name = 'FrontendBackendError';
     this.status = status;
+    this.code = code;
   }
+}
+
+// Turns Worker authorization codes into the next step the user can take.
+// Unknown errors keep the server's message.
+const PAPER_EXECUTION_GUIDANCE: Record<string, string> = {
+  UNAUTHENTICATED: 'Sign in on the Account page to place paper trades.',
+  ACCOUNT_INACTIVE: 'Your account is not active. Ask a release administrator to reactivate it.',
+  TRADER_ROLE_REQUIRED:
+    'Your account does not have paper-trading access yet. A release administrator must grant the TRADER role with GLOBAL scope in Admin → Access.',
+  RATE_LIMITED: 'Too many requests. Wait a minute and try again.',
+};
+
+export function describePaperExecutionError(error: unknown, fallback = 'Paper trade failed.'): string {
+  if (error instanceof FrontendBackendError && error.code && PAPER_EXECUTION_GUIDANCE[error.code]) {
+    return PAPER_EXECUTION_GUIDANCE[error.code];
+  }
+  return error instanceof Error && error.message ? error.message : fallback;
 }
 
 export function getBackendBaseUrl(): string {
@@ -50,7 +69,7 @@ function assertBrowserSafe(path: string, method: string): void {
   }
 }
 
-async function readError(response: Response): Promise<string> {
+async function readError(response: Response): Promise<{ message: string; code?: string }> {
   const fallback = `Backend request failed (${response.status})`;
   const contentType = response.headers.get('content-type') ?? '';
 
@@ -58,11 +77,14 @@ async function readError(response: Response): Promise<string> {
     if (contentType.includes('application/json')) {
       const payload = (await response.json()) as Record<string, unknown>;
       const message = payload.detail ?? payload.message ?? payload.error;
-      return typeof message === 'string' ? message : fallback;
+      return {
+        message: typeof message === 'string' ? message : fallback,
+        code: typeof payload.code === 'string' ? payload.code : undefined,
+      };
     }
-    return (await response.text()) || fallback;
+    return { message: (await response.text()) || fallback };
   } catch {
-    return fallback;
+    return { message: fallback };
   }
 }
 
@@ -110,7 +132,8 @@ async function backendFetch(path: string, init: BackendRequestInit = {}): Promis
     });
 
     if (!response.ok) {
-      throw new FrontendBackendError(await readError(response), response.status);
+      const { message, code } = await readError(response);
+      throw new FrontendBackendError(message, response.status, code);
     }
 
     return response;
