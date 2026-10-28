@@ -195,7 +195,7 @@ export function Header({
         throw new Error(`Paper trade blocked because portfolio mode is ${runtimeMode || 'unknown'}.`);
       }
 
-      const priceSnapshot = await fetchBackendJson<PaperPriceSnapshot>('/price?symbol=BTCUSDT', {
+      const priceSnapshot = await fetchBackendJson<PaperPriceSnapshot>('/market/price/BTCUSDT', {
         method: 'GET',
         cache: 'no-store',
       });
@@ -204,10 +204,10 @@ export function Header({
         throw new Error('BTC paper reference price is unavailable.');
       }
 
-      // The default certification wallet is 10,000 USDT. Use a bounded 5% test
-      // position so the trade is large enough to visibly exercise cash, order,
-      // position and audit flows without consuming the full demo portfolio.
-      const testNotional = Math.min(500, cashBefore * 0.05);
+      // Keep the test below the Worker paper-entry cap (2% of equity).
+      // Use 1.5% to leave room for rounding and ensure this remains a small
+      // certification trade; it never touches real funds.
+      const testNotional = Math.min(150, cashBefore * 0.015);
       if (testNotional < 10) {
         throw new Error('Paper balance is too small for the certification trade test.');
       }
