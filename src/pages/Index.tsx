@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { Header } from '@/components/dashboard/Header';
 import { RuntimeStatusStrip } from '@/components/dashboard/RuntimeStatusStrip';
@@ -8,7 +8,9 @@ import { EarningsPanel } from '@/components/dashboard/EarningsPanel';
 import { GuardianPanel } from '@/components/dashboard/GuardianPanel';
 import { MicrostructureDisplay } from '@/components/dashboard/MicrostructureDisplay';
 import { PortfolioPanel } from '@/components/dashboard/PortfolioPanel';
-import { PriceChart } from '@/components/dashboard/PriceChart';
+const PriceChart = lazy(() =>
+  import('@/components/dashboard/PriceChart').then(({ PriceChart: Component }) => ({ default: Component })),
+);
 import { PriceTicker } from '@/components/dashboard/PriceTicker';
 import { RiskGauge } from '@/components/dashboard/RiskGauge';
 import { SettingsModal } from '@/components/dashboard/SettingsModal';
@@ -500,7 +502,15 @@ const Index = () => {
           />
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-12 xl:gap-6">
             <div className="space-y-4 xl:col-span-8 xl:space-y-6">
-              <PriceChart price={selectedCoin} isLoading={isLoading} />
+              <Suspense
+                fallback={(
+                  <div className="cyber-card p-6 h-[360px] animate-pulse">
+                    <div className="h-full bg-muted rounded" />
+                  </div>
+                )}
+              >
+                <PriceChart price={selectedCoin} isLoading={isLoading} />
+              </Suspense>
               <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 lg:gap-6">
                 <MicrostructureDisplay features={microstructure} isLoading={isLoading || signalLoading} />
                 <AIInsightCard
