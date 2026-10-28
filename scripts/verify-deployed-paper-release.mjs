@@ -1,6 +1,6 @@
 const DEFAULT_FRONTEND_URL = 'https://crypto-signal-bot-indol.vercel.app'
 const DEFAULT_BACKEND_URL = 'https://crypto-signal-bot-api.analyzer-d94.workers.dev'
-const RELEASE_CONTRACT = 'paper-certification-2026-08-15'
+const RELEASE_CONTRACT = 'paper-certification-2026-09-05'
 const REQUEST_TIMEOUT_MS = 12_000
 
 function readArgument(name, fallback) {
