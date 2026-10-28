@@ -17,6 +17,7 @@ export default function Account() {
   const [mfaBusy, setMfaBusy] = useState(false);
   const [mfaLevel, setMfaLevel] = useState('unknown');
   const [factorId, setFactorId] = useState('');
+  const [hasVerifiedFactor, setHasVerifiedFactor] = useState(false);
   const [verificationCode, setVerificationCode] = useState('');
   const [qrCode, setQrCode] = useState('');
   const [totpSecret, setTotpSecret] = useState('');
@@ -50,6 +51,7 @@ export default function Account() {
       ]);
       setMfaLevel(assurance?.currentLevel ?? 'unknown');
       const verified = factors?.totp.find((factor) => factor.status === 'verified');
+      setHasVerifiedFactor(Boolean(verified));
       if (verified) setFactorId(verified.id);
     } catch {
       setMfaLevel('unavailable');
@@ -64,6 +66,15 @@ export default function Account() {
     setMfaBusy(true);
     try {
       const client = await getSupabaseClient();
+      // An abandoned enrollment leaves an unverified factor with the same friendly
+      // name, which makes a fresh enroll fail. Unverified factors grant nothing, so
+      // remove them before starting again.
+      const { data: existing } = await client.auth.mfa.listFactors();
+      for (const stale of existing?.all ?? []) {
+        if (stale.factor_type === 'totp' && stale.status === 'unverified') {
+          await client.auth.mfa.unenroll({ factorId: stale.id });
+        }
+      }
       const { data, error } = await client.auth.mfa.enroll({
         factorType: 'totp',
         friendlyName: 'Crypto Signal Bot administrator',
@@ -218,7 +229,16 @@ export default function Account() {
                 <p className="text-sm font-semibold">Administrator step-up authentication</p>
                 <p className="text-xs text-muted-foreground">Current assurance: <strong>{mfaLevel.toUpperCase()}</strong>. User, access and bootstrap mutations require AAL2.</p>
               </div>
-              {!qrCode && mfaLevel !== 'aal2' && (
+              {!qrCode && mfaLevel !== 'aal2' && hasVerifiedFactor && (
+                <div className="space-y-2">
+                  <p className="text-xs text-muted-foreground">Your authenticator is set up. Enter its current code to step up this session.</p>
+                  <div className="flex gap-2">
+                    <Input inputMode="numeric" autoComplete="one-time-code" value={verificationCode} onChange={(event) => setVerificationCode(event.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="Six-digit code" />
+                    <Button onClick={() => void verifyTotp()} disabled={mfaBusy || verificationCode.length !== 6}>Verify</Button>
+                  </div>
+                </div>
+              )}
+              {!qrCode && mfaLevel !== 'aal2' && !hasVerifiedFactor && (
                 <Button variant="outline" onClick={() => void beginTotpEnrollment()} disabled={mfaBusy || isDemoMode}>Enroll authenticator</Button>
               )}
               {qrCode && (

@@ -75,8 +75,11 @@ if (signIn.error) fail(`Sign-in failed: ${signIn.error.message}`);
 const factors = await supabase.auth.mfa.listFactors();
 const totp = factors.data?.totp?.find((factor) => factor.status === 'verified');
 if (!totp) {
+  const unverified = (factors.data?.all ?? []).filter((factor) => factor.factor_type === 'totp' && factor.status === 'unverified').length;
   await supabase.auth.signOut({ scope: 'local' });
-  fail('This account has no verified authenticator. Enroll one on the Account page, then run this again.');
+  fail(unverified
+    ? `This account has ${unverified} authenticator setup(s) that were never verified. On the Account page click "Enroll authenticator", scan the new QR code, enter the code and click Verify, then run this again.`
+    : 'This account has no authenticator. Enroll one on the Account page, then run this again.');
 }
 const code = await ask('6-digit authenticator code: ');
 const verify = await supabase.auth.mfa.challengeAndVerify({ factorId: totp.id, code });
