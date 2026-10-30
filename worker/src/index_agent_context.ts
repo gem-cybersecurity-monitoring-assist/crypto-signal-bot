@@ -179,7 +179,7 @@ async function handleOneShotPaperDemo(
   }
 
   const bearer = request.headers.get('Authorization')?.trim() ?? ''
-  if (!/^Bearer\\s+\\S+$/i.test(bearer)) {
+  if (!/^Bearer\s+\S+$/i.test(bearer)) {
     return Response.json({ ok: false, error: 'authentication_required' }, { status: 401 })
   }
 
