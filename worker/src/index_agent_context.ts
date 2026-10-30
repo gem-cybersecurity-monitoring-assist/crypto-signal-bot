@@ -178,7 +178,35 @@ async function handleOneShotPaperDemo(
     return Response.json({ ok: false, error: 'server_operator_key_not_configured' }, { status: 503 })
   }
 
+  const bearer = request.headers.get('Authorization')?.trim() ?? ''
+  if (!/^Bearer\\s+\\S+$/i.test(bearer)) {
+    return Response.json({ ok: false, error: 'authentication_required' }, { status: 401 })
+  }
+
   const origin = url.origin
+  const access = await workerJson(origin, '/v1/management/me', env, ctx, {
+    headers: { Accept: 'application/json', Authorization: bearer },
+  })
+  const profile = access.body?.profile as Record<string, unknown> | undefined
+  const roles = Array.isArray(access.body?.roles)
+    ? access.body.roles as Array<Record<string, unknown>>
+    : []
+  const hasGlobalTrader = roles.some((grant) =>
+    grant.role === 'TRADER'
+    && grant.scope_type === 'GLOBAL'
+    && grant.scope_key === 'global'
+  )
+  if (
+    !access.response.ok
+    || profile?.status !== 'ACTIVE'
+    || access.body?.access_allowed !== true
+    || !hasGlobalTrader
+  ) {
+    return Response.json({ ok: false, error: 'active_global_trader_role_required' }, {
+      status: access.response.status === 401 ? 401 : 403,
+    })
+  }
+
   const [health, runtime, guardian, portfolio] = await Promise.all([
     workerJson(origin, '/health', env, ctx),
     workerJson(origin, '/runtime/status', env, ctx),
