@@ -49,17 +49,23 @@ export function buildSignalProvenance(input: SignalProvenanceInput) {
       : null)
 
   const freshnessAt = input.sourceKind === 'persisted' ? signalAt : marketAt
-  const ageMs = freshnessAt === null ? null : nowMs - freshnessAt
+  const signalAgeMs = signalAt === null ? null : nowMs - signalAt
+  const marketAgeMs = marketAt === null ? null : nowMs - marketAt
   const stale = snapshotMarkedStale
     || fallbackPrice
     || cachedPrice
     || eventId === null
-    || marketAt === null
-    || ageMs === null
-    || ageMs < 0
-    || ageMs > SIGNAL_MAX_AGE_MS
+    || signalAgeMs === null
+    || signalAgeMs < 0
+    || signalAgeMs > SIGNAL_MAX_AGE_MS
+    || marketAgeMs === null
+    || marketAgeMs < 0
+    || marketAgeMs > SIGNAL_MAX_AGE_MS
 
-  const expiresAt = freshnessAt === null ? null : freshnessAt + SIGNAL_MAX_AGE_MS
+  const expiresAt = freshnessAt === null ? null : Math.min(
+    freshnessAt + SIGNAL_MAX_AGE_MS,
+    marketAt === null ? Number.POSITIVE_INFINITY : marketAt + SIGNAL_MAX_AGE_MS,
+  )
   const provenanceStatus = fallbackPrice
     ? 'UNTRUSTED_PRICE_FALLBACK'
     : input.sourceKind === 'persisted'
