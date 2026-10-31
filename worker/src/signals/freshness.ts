@@ -21,11 +21,14 @@ const parseTime = (value: string | null | undefined): number | null => {
 export function buildSignalFreshnessMetadata(input: SignalFreshnessInput, nowMs = Date.now()) {
   if (input.sourceKind === "persisted") {
     const createdMs = parseTime(input.signalCreatedAt);
-    const stale = createdMs === null || createdMs > nowMs + 5 * 60 * 1000 || nowMs - createdMs > MAX_AGE_MS;
+    // Persisted rows have no linked market-snapshot ID/time in the current schema. A recent row timestamp alone cannot prove its entry price is current.
+    const stale = true;
     return {
       schema_version: 1,
       event_id: Number.isInteger(input.signalId) ? "signal:" + input.symbol + ":" + input.signalId : null,
       source_kind: "persisted" as const,
+      provenance_status: "PERSISTED_SIGNAL",
+      decision_grade: false,
       signal_created_at: input.signalCreatedAt ?? null,
       market_data_as_of: null,
       market_data_stale: null,
@@ -46,6 +49,8 @@ export function buildSignalFreshnessMetadata(input: SignalFreshnessInput, nowMs 
     schema_version: 1,
     event_id: eventId,
     source_kind: "derived" as const,
+    provenance_status: "DERIVED_WORKER_SIGNAL",
+    decision_grade: !marketDataStale,
     signal_created_at: new Date(nowMs).toISOString(),
     market_data_as_of: snapshotMs === null ? null : new Date(snapshotMs).toISOString(),
     market_data_stale: marketDataStale,
