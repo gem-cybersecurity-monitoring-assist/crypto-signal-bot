@@ -19,7 +19,7 @@ export default async function handler(request, response) {
   const authorization = typeof request.headers.authorization === 'string'
     ? request.headers.authorization.trim()
     : '';
-  if (!/^Bearer\\s+\\S+$/i.test(authorization)) {
+  if (!/^Bearer\s+\S+$/i.test(authorization)) {
     return json(response, 401, { ok: false, error: 'authentication_required' });
   }
 
