@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import subprocess
 import unittest
@@ -8,11 +9,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
 class RenderStartSafetyTests(unittest.TestCase):
     def test_hosted_startup_forces_paper_testnet_even_with_stale_live_environment(self):
         """Render/Railway must not inherit a stale live/mainnet environment."""
-        repo_root = Path(__file__).resolve().parents[2]
-        startup_path = repo_root / "render_start.py"
+        startup_path = REPO_ROOT / "render_start.py"
         hostile_environment = {
             "EXCHANGE_MODE": "live",
             "TRADING_MODE": "live",
@@ -44,6 +47,14 @@ class RenderStartSafetyTests(unittest.TestCase):
         self.assertEqual(observed["LIVE_TRADING_ENABLED"], "false")
         self.assertEqual(observed["WITHDRAWALS_ENABLED"], "false")
         self.assertEqual(observed["PAPER_STARTING_BALANCE_USDT"], "10000")
+
+    def test_railway_build_and_healthcheck_use_the_safe_python_service(self):
+        config = json.loads((REPO_ROOT / "railway.json").read_text(encoding="utf-8"))
+        self.assertEqual(config["build"]["builder"], "RAILPACK")
+        self.assertIn("backend/requirements.txt", config["build"]["buildCommand"])
+        self.assertEqual(config["deploy"]["startCommand"], "python render_start.py")
+        self.assertEqual(config["deploy"]["healthcheckPath"], "/healthz")
+        self.assertEqual(config["deploy"]["restartPolicyType"], "ON_FAILURE")
 
 
 if __name__ == "__main__":
