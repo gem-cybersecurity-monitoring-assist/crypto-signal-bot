@@ -16,6 +16,7 @@
 
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
+import { buildSignalFreshnessMetadata } from './signals/freshness'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -807,7 +808,7 @@ app.get('/signal/latest', async (c) => {
     'SELECT * FROM signals WHERE symbol = ? ORDER BY created_at DESC LIMIT 1'
   ).bind(symbol).first<SignalRow>().catch(() => null)
 
-  if (row) return c.json({ ...row, action: row.side, signal: row.side, available: true, ...safeRuntime(c.env), ts: ts() })
+  if (row) return c.json({ ...row, action: row.side, signal: row.side, available: true, ...buildSignalFreshnessMetadata({ sourceKind: 'persisted', symbol, signalId: row.id, signalCreatedAt: row.created_at }), ...safeRuntime(c.env), ts: ts() })
 
   // Generate live signal from price action
   const px      = await resolvePrice(c.env, symbol)
@@ -824,6 +825,11 @@ app.get('/signal/latest', async (c) => {
     if (emaFast < emaSlow * 0.998) { side = 'SELL'; confidence = 0.65 }
   }
 
+  const latestSnapshot = await c.env.DB.prepare(
+    'SELECT id, source, stale, created_at FROM market_snapshots WHERE symbol = ? ORDER BY created_at DESC LIMIT 1'
+  ).bind(symbol).first<{ id: number; source: string; stale: number | boolean; created_at: string }>().catch(() => null)
+  const freshness = buildSignalFreshnessMetadata({ sourceKind: 'derived', symbol, side, priceSource: px.source, snapshot: latestSnapshot })
+
   return c.json({
     symbol, timeframe: '5m', side, action: side, signal: side,
     confidence, entry_price: px.price,
@@ -831,6 +837,7 @@ app.get('/signal/latest', async (c) => {
     take_profit: side === 'BUY' ? px.price * 1.04 : null,
     strategy: 'worker_ema_crossover', available: true,
     price_source: px.source,
+    ...freshness,
     ...safeRuntime(c.env), ts: ts(),
   })
 })
