@@ -1,4 +1,4 @@
-export type SignalSnapshot = { id: number; source: string; stale: number | boolean; created_at: string } | null;
+export type SignalSnapshot = { id: number; price: number; source: string; stale: number | boolean; created_at: string } | null;
 
 export type SignalFreshnessInput = {
   sourceKind: 'persisted' | 'derived';
@@ -7,6 +7,8 @@ export type SignalFreshnessInput = {
   signalId?: number;
   signalCreatedAt?: string | null;
   priceSource?: string | null;
+  entryPrice?: number | null;
+  priceIsStale?: boolean;
   snapshot?: SignalSnapshot;
 };
 
@@ -40,7 +42,14 @@ export function buildSignalFreshnessMetadata(input: SignalFreshnessInput, nowMs 
 
   const snapshot = input.snapshot ?? null;
   const snapshotMs = parseTime(snapshot?.created_at);
-  const liveSourceMatches = Boolean(snapshot && input.priceSource && input.priceSource === snapshot.source && (input.priceSource === "coinbase" || input.priceSource === "binance"));
+  const liveSourceMatches = Boolean(
+    snapshot && input.priceSource &&
+    input.priceSource === snapshot.source &&
+    (input.priceSource === "coinbase" || input.priceSource === "binance") &&
+    Number.isFinite(input.entryPrice) &&
+    Math.abs(snapshot.price - (input.entryPrice ?? 0)) <= Math.max(1e-8, Math.abs(input.entryPrice ?? 0) * 1e-10) &&
+    input.priceIsStale === false
+  );
   const marketDataStale = !liveSourceMatches || !snapshot || Boolean(snapshot.stale) || snapshotMs === null || snapshotMs > nowMs + 5 * 60 * 1000 || nowMs - (snapshotMs ?? 0) > MAX_AGE_MS;
   const eventId = snapshot && Number.isInteger(snapshot.id)
     ? "ema:" + input.symbol + ":" + snapshot.id + ":" + (input.side ?? "HOLD")
