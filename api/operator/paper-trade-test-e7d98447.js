@@ -16,10 +16,20 @@ export default async function handler(request, response) {
     return json(response, 405, { ok: false, error: 'method_not_allowed' });
   }
 
+  const authorization = typeof request.headers.authorization === 'string'
+    ? request.headers.authorization.trim()
+    : '';
+  if (!/^Bearer\\s+\\S+$/i.test(authorization)) {
+    return json(response, 401, { ok: false, error: 'authentication_required' });
+  }
+
   try {
     const upstream = await fetch(`${WORKER}${DEMO_PATH}`, {
       method: 'GET',
-      headers: { Accept: 'application/json' },
+      headers: {
+        Accept: 'application/json',
+        Authorization: authorization,
+      },
       signal: AbortSignal.timeout(TIMEOUT_MS),
       redirect: 'error',
       cache: 'no-store',
