@@ -830,6 +830,11 @@ app.get('/signal/latest', async (c) => {
   ).bind(symbol).first<{ id: number; source: string; stale: number | boolean; created_at: string }>().catch(() => null)
   const freshness = buildSignalFreshnessMetadata({ sourceKind: 'derived', symbol, side, priceSource: px.source, snapshot: latestSnapshot })
 
+  const latestSnapshot = await c.env.DB.prepare(
+    'SELECT id, source, stale, created_at FROM market_snapshots WHERE symbol = ? ORDER BY created_at DESC LIMIT 1'
+  ).bind(symbol).first<{ id: number; source: string; stale: number | boolean; created_at: string }>().catch(() => null)
+  const freshness = buildSignalFreshnessMetadata({ sourceKind: 'derived', symbol, side, priceSource: px.source, snapshot: latestSnapshot })
+
   return c.json({
     symbol, timeframe: '5m', side, action: side, signal: side,
     confidence, entry_price: px.price,
