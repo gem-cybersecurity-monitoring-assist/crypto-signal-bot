@@ -51,7 +51,9 @@ export function buildSignalFreshnessMetadata(input: SignalFreshnessInput, nowMs 
     Math.abs(snapshot.price - (input.entryPrice ?? 0)) <= Math.max(1e-8, Math.abs(input.entryPrice ?? 0) * 1e-10) &&
     input.priceIsStale === false
   );
-  const marketDataStale = !liveSourceMatches || !snapshot || Boolean(snapshot.stale) || snapshotMs === null || snapshotMs > nowMs + 5 * 60 * 1000 || nowMs - (snapshotMs ?? 0) > MAX_AGE_MS;
+  // A future-dated snapshot is never fresh. Copy Center rejects future market
+  // timestamps even inside its clock-skew tolerance, so keep both contracts aligned.
+  const marketDataStale = !liveSourceMatches || !snapshot || Boolean(snapshot.stale) || snapshotMs === null || snapshotMs > nowMs || nowMs - (snapshotMs ?? 0) > MAX_AGE_MS;
   const eventId = snapshot && Number.isInteger(snapshot.id)
     ? "ema:" + input.symbol + ":" + snapshot.id + ":" + (input.side ?? "HOLD")
     : null;
