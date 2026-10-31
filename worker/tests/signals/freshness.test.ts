@@ -21,7 +21,7 @@ describe('signal freshness metadata', () => {
   })
 
   it('marks a derived signal fresh only when a recent live-source snapshot matches', () => {
-    const result = buildSignalFreshnessMetadata({ sourceKind: 'derived', symbol: 'BTC', side: 'BUY', priceSource: 'coinbase', snapshot: { id: 88, source: 'coinbase', stale: 0, created_at: '2026-10-31T11:59:00.000Z' } }, now)
+    const result = buildSignalFreshnessMetadata({ sourceKind: 'derived', symbol: 'BTC', side: 'BUY', priceSource: 'coinbase', entryPrice: 100, priceIsStale: false, snapshot: { id: 88, price: 100, source: 'coinbase', stale: 0, created_at: '2026-10-31T11:59:00.000Z' } }, now)
     expect(result.event_id).toBe('ema:BTC:88:BUY')
     expect(result.market_data_as_of).toBe('2026-10-31T11:59:00.000Z')
     expect(result.market_data_stale).toBe(false)
@@ -31,16 +31,26 @@ describe('signal freshness metadata', () => {
   })
 
   it('marks cache, fallback, mismatched, stale, and missing snapshots stale', () => {
-    const snapshot = { id: 88, source: 'coinbase', stale: 0, created_at: '2026-10-31T11:59:00.000Z' }
+    const snapshot = { id: 88, price: 100, source: 'coinbase', stale: 0, created_at: '2026-10-31T11:59:00.000Z' }
     for (const priceSource of ['cache:coinbase', 'fallback', 'binance']) {
-      expect(buildSignalFreshnessMetadata({ sourceKind: 'derived', symbol: 'BTC', priceSource, snapshot }, now).stale).toBe(true)
+      expect(buildSignalFreshnessMetadata({ sourceKind: 'derived', symbol: 'BTC', priceSource, entryPrice: 100, priceIsStale: false, snapshot }, now).stale).toBe(true)
     }
-    expect(buildSignalFreshnessMetadata({ sourceKind: 'derived', symbol: 'BTC', priceSource: 'coinbase', snapshot: { ...snapshot, stale: 1 } }, now).stale).toBe(true)
-    expect(buildSignalFreshnessMetadata({ sourceKind: 'derived', symbol: 'BTC', priceSource: 'coinbase' }, now).stale).toBe(true)
+    expect(buildSignalFreshnessMetadata({ sourceKind: 'derived', symbol: 'BTC', priceSource: 'coinbase', entryPrice: 100, priceIsStale: false, snapshot: { ...snapshot, stale: 1 } }, now).stale).toBe(true)
+    expect(buildSignalFreshnessMetadata({ sourceKind: 'derived', symbol: 'BTC', priceSource: 'coinbase', entryPrice: 100, priceIsStale: false }, now).stale).toBe(true)
+  })
+
+  it('requires the signal entry price to match the timestamped market snapshot', () => {
+    const snapshot = { id: 91, price: 100, source: 'coinbase', stale: 0, created_at: '2026-10-31T11:59:00.000Z' }
+    const mismatch = buildSignalFreshnessMetadata({ sourceKind: 'derived', symbol: 'BTC', priceSource: 'coinbase', entryPrice: 101, priceIsStale: false, snapshot }, now)
+    const staleFeed = buildSignalFreshnessMetadata({ sourceKind: 'derived', symbol: 'BTC', priceSource: 'coinbase', entryPrice: 100, priceIsStale: true, snapshot }, now)
+    expect(mismatch.stale).toBe(true)
+    expect(mismatch.decision_grade).toBe(false)
+    expect(staleFeed.stale).toBe(true)
+    expect(staleFeed.decision_grade).toBe(false)
   })
 
   it('expires derived metadata when the market snapshot is old', () => {
-    const result = buildSignalFreshnessMetadata({ sourceKind: 'derived', symbol: 'BTC', side: 'SELL', priceSource: 'binance', snapshot: { id: 90, source: 'binance', stale: 0, created_at: '2026-10-31T11:00:00.000Z' } }, now)
+    const result = buildSignalFreshnessMetadata({ sourceKind: 'derived', symbol: 'BTC', side: 'SELL', priceSource: 'binance', entryPrice: 100, priceIsStale: false, snapshot: { id: 90, price: 100, source: 'binance', stale: 0, created_at: '2026-10-31T11:00:00.000Z' } }, now)
     expect(result.stale).toBe(true)
     expect(result.event_id).toBe('ema:BTC:90:SELL')
   })
