@@ -10,7 +10,9 @@ describe('signal freshness metadata', () => {
     expect(result.source_kind).toBe('persisted')
     expect(result.market_data_as_of).toBeNull()
     expect(result.market_data_stale).toBeNull()
-    expect(result.stale).toBe(false)
+    expect(result.stale).toBe(true)
+    expect(result.decision_grade).toBe(false)
+    expect(result.provenance_status).toBe('PERSISTED_SIGNAL')
   })
 
   it('marks old persisted signals stale', () => {
@@ -24,6 +26,8 @@ describe('signal freshness metadata', () => {
     expect(result.market_data_as_of).toBe('2026-10-31T11:59:00.000Z')
     expect(result.market_data_stale).toBe(false)
     expect(result.stale).toBe(false)
+    expect(result.decision_grade).toBe(true)
+    expect(result.provenance_status).toBe('DERIVED_WORKER_SIGNAL')
   })
 
   it('marks cache, fallback, mismatched, stale, and missing snapshots stale', () => {
