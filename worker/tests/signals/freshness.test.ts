@@ -56,4 +56,15 @@ describe('signal freshness metadata', () => {
     expect(result.stale).toBe(true)
     expect(result.event_id).toBe('ema:BTC:90:SELL')
   })
+
+  it('marks even slightly future-dated market snapshots stale', () => {
+    const result = buildSignalFreshnessMetadata({
+      sourceKind: 'derived', symbol: 'BTC', side: 'BUY',
+      priceSource: 'coinbase', entryPrice: 100, priceIsStale: false,
+      snapshot: { id: 92, price: 100, source: 'coinbase', stale: 0, created_at: '2026-10-31T12:01:00.000Z' },
+    }, now)
+    expect(result.stale).toBe(true)
+    expect(result.decision_grade).toBe(false)
+    expect(result.market_data_stale).toBe(true)
+  })
 })
