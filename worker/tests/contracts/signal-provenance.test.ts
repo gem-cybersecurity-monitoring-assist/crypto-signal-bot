@@ -80,6 +80,35 @@ describe('read-only signal provenance', () => {
     expect(stale.decision_grade).toBe(false)
   })
 
+  it('rejects a recent persisted signal when its market snapshot is stale', () => {
+    const result = buildSignalProvenance({
+      symbol: 'BTC',
+      side: 'BUY',
+      sourceKind: 'persisted',
+      signalId: 91,
+      signalCreatedAt: '2026-10-31T11:59:00.000Z',
+      marketDataAsOf: '2026-10-31T11:00:00.000Z',
+      priceSource: 'coinbase',
+      nowMs: NOW,
+    })
+    expect(result.stale).toBe(true)
+    expect(result.decision_grade).toBe(false)
+  })
+
+  it('rejects unsupported signal sides', () => {
+    const result = buildSignalProvenance({
+      symbol: 'BTC',
+      side: 'OPEN_LONG',
+      sourceKind: 'derived',
+      signalCreatedAt: new Date(NOW).toISOString(),
+      marketSnapshotId: 14,
+      marketDataAsOf: new Date(NOW - 1_000).toISOString(),
+      priceSource: 'coinbase',
+      nowMs: NOW,
+    })
+    expect(result.decision_grade).toBe(false)
+  })
+
   it('rejects future-dated source timestamps and explicitly stale snapshots', () => {
     const future = buildSignalProvenance({
       symbol: 'BTC',
