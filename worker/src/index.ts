@@ -836,7 +836,6 @@ app.get('/signal/latest', async (c) => {
     stop_loss: side === 'BUY' ? px.price * 0.98 : null,
     take_profit: side === 'BUY' ? px.price * 1.04 : null,
     strategy: 'worker_ema_crossover', available: true,
-    price_source: px.source,
     ...freshness,
     ...safeRuntime(c.env), ts: ts(),
   })
