@@ -23,7 +23,8 @@ echo "== Crypto Signal Bot guarded Worker release =="
 echo "Target: $WORKER_URL"
 echo "Account: $CLOUDFLARE_ACCOUNT_ID"
 
-echo "[1/4] Validate current account credentials"
+echo "[1/4] Validate canonical deployment account and credentials"
+node scripts/verify-worker-deployment-target.mjs
 npm --prefix worker exec -- wrangler whoami --config ../wrangler.toml >/dev/null
 
 echo "[2/4] Run complete paper Worker release gates"
