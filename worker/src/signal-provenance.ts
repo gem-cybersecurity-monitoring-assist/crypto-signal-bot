@@ -38,6 +38,8 @@ export function buildSignalProvenance(input: SignalProvenanceInput) {
   const marketAt = timestamp(input.marketDataAsOf)
   const source = input.priceSource?.trim().toLowerCase() ?? ''
   const fallbackPrice = !source || source === 'fallback'
+  const validSide = ['BUY', 'SELL', 'HOLD'].includes(input.side.toUpperCase())
+  const validSymbol = /^[A-Z0-9]{2,20}$/.test(input.symbol)
   const cachedPrice = source.startsWith('cache:')
   const snapshotMarkedStale = input.marketSnapshotStale === true
     || input.marketSnapshotStale === 1
@@ -55,6 +57,8 @@ export function buildSignalProvenance(input: SignalProvenanceInput) {
     || fallbackPrice
     || cachedPrice
     || eventId === null
+    || !validSide
+    || !validSymbol
     || signalAgeMs === null
     || signalAgeMs < 0
     || signalAgeMs > SIGNAL_MAX_AGE_MS
