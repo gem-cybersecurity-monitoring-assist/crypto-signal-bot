@@ -16,6 +16,7 @@
 
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
+import { buildSignalProvenance } from './signal-provenance'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -807,22 +808,63 @@ app.get('/signal/latest', async (c) => {
     'SELECT * FROM signals WHERE symbol = ? ORDER BY created_at DESC LIMIT 1'
   ).bind(symbol).first<SignalRow>().catch(() => null)
 
-  if (row) return c.json({ ...row, action: row.side, signal: row.side, available: true, ...safeRuntime(c.env), ts: ts() })
+  const marketSnapshot = await c.env.DB.prepare(
+    'SELECT id, source, stale, created_at FROM market_snapshots WHERE symbol = ? ORDER BY created_at DESC LIMIT 1'
+  ).bind(symbol).first<{ id: number; source: string; stale: number | boolean; created_at: string }>().catch(() => null)
 
-  // Generate live signal from price action
-  const px      = await resolvePrice(c.env, symbol)
+  if (row) {
+    const provenance = buildSignalProvenance({
+      symbol,
+      side: row.side,
+      sourceKind: 'persisted',
+      signalId: row.id,
+      signalCreatedAt: row.created_at ?? null,
+      marketSnapshotId: marketSnapshot?.id ?? null,
+      marketDataAsOf: marketSnapshot?.created_at ?? null,
+      priceSource: marketSnapshot?.source ?? null,
+      marketSnapshotStale: marketSnapshot?.stale ?? true,
+    })
+    return c.json({
+      ...row,
+      action: row.side,
+      signal: row.side,
+      available: true,
+      ...provenance,
+      ...safeRuntime(c.env),
+      ts: ts(),
+    })
+  }
+
+  // Generate a display-only signal from price action. The provenance helper
+  // prevents a response timestamp or static fallback price from appearing fresh.
+  const px = await resolvePrice(c.env, symbol)
   const history = await c.env.DB.prepare(
     'SELECT price FROM market_snapshots WHERE symbol = ? ORDER BY created_at DESC LIMIT 20'
   ).bind(symbol).all<{ price: number }>().catch(() => ({ results: [] }))
-  const prices  = (history.results ?? []).map(r => n(r.price)).filter(p => p > 0)
+  const prices = (history.results ?? []).map(r => n(r.price)).filter(p => p > 0)
 
   let side = 'HOLD', confidence = 0.5
   if (prices.length >= 5) {
     const emaFast = prices.slice(0, 3).reduce((s, v) => s + v, 0) / 3
     const emaSlow = prices.reduce((s, v) => s + v, 0) / prices.length
-    if (emaFast > emaSlow * 1.002) { side = 'BUY';  confidence = 0.68 }
+    if (emaFast > emaSlow * 1.002) { side = 'BUY'; confidence = 0.68 }
     if (emaFast < emaSlow * 0.998) { side = 'SELL'; confidence = 0.65 }
   }
+
+  const latestSnapshot = await c.env.DB.prepare(
+    'SELECT id, source, stale, created_at FROM market_snapshots WHERE symbol = ? ORDER BY created_at DESC LIMIT 1'
+  ).bind(symbol).first<{ id: number; source: string; stale: number | boolean; created_at: string }>().catch(() => null)
+  const signalCreatedAt = new Date(ts()).toISOString()
+  const provenance = buildSignalProvenance({
+    symbol,
+    side,
+    sourceKind: 'derived',
+    signalCreatedAt,
+    marketSnapshotId: latestSnapshot?.id ?? null,
+    marketDataAsOf: latestSnapshot?.created_at ?? null,
+    priceSource: px.source,
+    marketSnapshotStale: px.stale || latestSnapshot?.stale === true || latestSnapshot?.stale === 1,
+  })
 
   return c.json({
     symbol, timeframe: '5m', side, action: side, signal: side,
@@ -830,8 +872,9 @@ app.get('/signal/latest', async (c) => {
     stop_loss: side === 'BUY' ? px.price * 0.98 : null,
     take_profit: side === 'BUY' ? px.price * 1.04 : null,
     strategy: 'worker_ema_crossover', available: true,
-    price_source: px.source,
-    ...safeRuntime(c.env), ts: ts(),
+    ...provenance,
+    ...safeRuntime(c.env),
+    ts: ts(),
   })
 })
 
