@@ -116,6 +116,10 @@ jobs:
           ALLOW_MAINNET: "false"
         run: npm run verify:paper-safety
 
+      - name: Test canonical Cloudflare token-scope preflight
+        working-directory: worker
+        run: node --test ../scripts/verify-cloudflare-token-scope.test.mjs
+
       - name: Validate Wrangler bundle with dry run
         working-directory: worker
         env:
