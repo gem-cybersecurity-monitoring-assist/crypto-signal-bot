@@ -14,6 +14,8 @@ for (const [token, message] of [
   ["input.candidate.operation !== 'PLACE'", 'composition must remain place-only'],
   ['assertDependencies(dependencies)', 'injected dependency verification is missing'],
   ['loadReviewedBitgetDemoDispatchAuthorization(', 'reviewed authorization must be reloaded first'],
+  ['requireReviewedDemoAccountFamily(', 'independent account-family review must occur before the demo binding write'],
+  ['assessBitgetSpotFamily(', 'reviewed account-family candidate checker is missing'],
   ['recordBitgetDemoPlaceControlBinding(', 'migration-027 control binding must be recorded or replayed'],
   ['createD1BitgetDemoFreshControlSource(env)', 'D1 fresh-control source is missing'],
   ['createVerifiedBitgetDemoFreshControlLoader(', 'fresh controls must use the private-brand verifier'],
@@ -38,6 +40,7 @@ for (const [token, message] of [
 }
 
 const reviewedPosition = source.lastIndexOf('loadReviewedBitgetDemoDispatchAuthorization(')
+const familyPosition = source.lastIndexOf('  await requireReviewedDemoAccountFamily(')
 const bindingPosition = source.lastIndexOf('recordBitgetDemoPlaceControlBinding(')
 const freshPosition = source.lastIndexOf('createD1BitgetDemoFreshControlSource(env)')
 const credentialPosition = source.lastIndexOf('createBitgetDemoCallbackCredentialProvider(')
@@ -46,20 +49,22 @@ const recoveryPosition = source.lastIndexOf('createBitgetDemoGetOnlyRecoveryBoun
 const runnerPosition = source.lastIndexOf('runReviewedBitgetDemoCertification(')
 if (
   reviewedPosition < 0
+  || familyPosition < 0
   || bindingPosition < 0
   || freshPosition < 0
   || credentialPosition < 0
   || ratePosition < 0
   || recoveryPosition < 0
   || runnerPosition < 0
-  || reviewedPosition >= bindingPosition
+  || reviewedPosition >= familyPosition
+  || familyPosition >= bindingPosition
   || bindingPosition >= freshPosition
   || freshPosition >= runnerPosition
   || credentialPosition >= runnerPosition
   || ratePosition >= runnerPosition
   || recoveryPosition >= runnerPosition
 ) {
-  failures.push('composition ordering is not authorization -> binding -> adapters -> runner')
+  failures.push('composition ordering is not authorization -> account-family review -> binding -> adapters -> runner')
 }
 
 for (const pattern of [
