@@ -67,5 +67,3 @@ for (const [method, path, expectedStatus, validateBody] of checks) {
 if (failed) {
   process.exit(1);
 }
-
-[executed on device: gem-coder-workspace-vm (94f377a4-27a5-4fb9-b9c3-20cfa711d2cd)]
