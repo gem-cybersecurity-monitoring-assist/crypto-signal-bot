@@ -21,9 +21,16 @@ export function verifyAuthenticatedCloudflareAccount(whoami, environment = proce
     throw new Error('Cloudflare deployment blocked: authenticated account scope is unavailable.')
   }
   // Fail closed if Wrangler changes the expected account schema.
-  const visibleIds = whoami.accounts.map((account) =>
-    account && typeof account === 'object' ? account.id : null,
-  )
+  const visibleIds = whoami.accounts.map((account) => {
+    if (!account || typeof account !== 'object' || Array.isArray(account) ||
+        typeof account.id !== 'string' || !/^[a-fA-F0-9]{32}$/.test(account.id)) {
+      throw new Error('Cloudflare deployment blocked: malformed authenticated account evidence.')
+    }
+    return account.id
+  })
+  if (new Set(visibleIds).size !== visibleIds.length) {
+    throw new Error('Cloudflare deployment blocked: duplicate authenticated account evidence.')
+  }
   if (!visibleIds.includes(requiredId)) {
     throw new Error('Cloudflare deployment blocked: API token cannot access the canonical Worker account.')
   }
