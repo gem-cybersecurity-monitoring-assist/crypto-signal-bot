@@ -221,3 +221,63 @@ describe('operator readiness browser source safety', () => {
     expect(layout).toContain('to="/operator-readiness"');
   });
 });
+
+describe('operator account-family display evidence', () => {
+  const family = {
+    family: 'CLASSIC_SPOT_V2',
+    reviewStatus: 'REVIEW_COMPATIBLE',
+    sourceMode: 'ISOLATED_READ_ONLY_CLIENT',
+    sourceVerified: true,
+    observedAt: '2026-07-19T17:29:50.000Z',
+    evidenceHash: 'a'.repeat(64),
+  };
+
+  it('shows only an explicitly scoped fresh provider-family review, never trading authorization', () => {
+    const payload = validPayload() as ReturnType<typeof validPayload> & {
+      account: ReturnType<typeof validPayload>['account'] & { apiFamilyEvidence?: unknown };
+    };
+    payload.account.apiFamilyEvidence = family;
+    const snapshot = normalizeOperatorReadinessSnapshot(payload);
+    expect(snapshot.account?.apiFamilyEvidence).toMatchObject({
+      family: 'CLASSIC_SPOT_V2',
+      reviewStatus: 'REVIEW_COMPATIBLE',
+      sourceMode: 'ISOLATED_READ_ONLY_CLIENT',
+    });
+    expect(snapshot.activation?.liveReady).toBe(false);
+    expect(snapshot.locks.executionAllowed).toBe(false);
+  });
+
+  it('does not invent family certification when the gateway omits the evidence', () => {
+    const snapshot = normalizeOperatorReadinessSnapshot(validPayload());
+    expect(snapshot.account?.apiFamilyEvidence).toBeNull();
+  });
+
+  it('hides family evidence when the operator lacks certification visibility', () => {
+    const payload = validPayload() as ReturnType<typeof validPayload> & {
+      account: ReturnType<typeof validPayload>['account'] & { apiFamilyEvidence?: unknown };
+    };
+    payload.account.apiFamilyEvidence = family;
+    payload.visibleResources = ['ACTIVATION_GATE'];
+    expect(normalizeOperatorReadinessSnapshot(payload).account?.apiFamilyEvidence).toBeNull();
+  });
+
+  it.each([
+    ['UTA marked review-compatible', { family: 'UTA_SPOT_V3' }],
+    ['no source verification', { sourceVerified: false }],
+    ['missing evidence hash', { evidenceHash: null }],
+    ['bad evidence hash', { evidenceHash: 'fake' }],
+    ['unsupported source mode', { sourceMode: 'INJECTED_FIXTURES' }],
+    ['stale observation', { observedAt: '2026-07-19T17:00:00.000Z' }],
+    ['future observation', { observedAt: '2026-07-19T17:30:30.000Z' }],
+    ['invalid observation', { observedAt: 'not-a-timestamp' }],
+    ['unknown review status', { reviewStatus: 'LIVE_APPROVED' }],
+  ])('rejects %s rather than reporting account compatibility', (_label, change) => {
+    const payload = validPayload() as ReturnType<typeof validPayload> & {
+      account: ReturnType<typeof validPayload>['account'] & { apiFamilyEvidence?: unknown };
+    };
+    payload.account.apiFamilyEvidence = { ...family, ...change };
+    const snapshot = normalizeOperatorReadinessSnapshot(payload);
+    expect(snapshot.gatewayStatus).toBe('available');
+    expect(snapshot.account?.apiFamilyEvidence).toBeNull();
+  });
+});

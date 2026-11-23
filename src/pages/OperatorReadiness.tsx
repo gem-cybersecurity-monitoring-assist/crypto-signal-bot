@@ -286,6 +286,10 @@ export default function OperatorReadiness() {
             <dl className="mt-4 grid gap-3 md:grid-cols-2">
               <div className="flex items-center justify-between gap-4"><dt className="text-sm text-secondary-600">Account</dt><dd><TextState value={snapshot.account.accountId} /></dd></div>
               <div className="flex items-center justify-between gap-4"><dt className="text-sm text-secondary-600">Product</dt><dd><TextState value={snapshot.account.productId} /></dd></div>
+              <div className="flex items-center justify-between gap-4"><dt className="text-sm text-secondary-600">Bitget API family</dt><dd><TextState value={snapshot.account.apiFamilyEvidence?.family.replaceAll('_', ' ') ?? null} /></dd></div>
+              <div className="flex items-center justify-between gap-4"><dt className="text-sm text-secondary-600">Family review</dt><dd><TextState value={snapshot.account.apiFamilyEvidence?.reviewStatus.replaceAll('_', ' ') ?? null} /></dd></div>
+              <div className="flex items-center justify-between gap-4"><dt className="text-sm text-secondary-600">Family evidence observed</dt><dd><TextState value={snapshot.account.apiFamilyEvidence ? formatTime(snapshot.account.apiFamilyEvidence.observedAt) : null} /></dd></div>
+              <div className="md:col-span-2 text-xs text-secondary-500">Family compatibility is a read-only review signal, not external trading certification, authorization, or live order permission. Missing or stale gateway evidence is shown as Not reported.</div>
               <div className="flex items-center justify-between gap-4"><dt className="text-sm text-secondary-600">Certification</dt><dd><TextState value={snapshot.account.certificationStatus} /></dd></div>
               <div className="flex items-center justify-between gap-4"><dt className="text-sm text-secondary-600">Recovery readiness</dt><dd><TextState value={snapshot.account.recoveryReadinessStatus} /></dd></div>
               <div className="flex items-center justify-between gap-4"><dt className="text-sm text-secondary-600">Reconciliation</dt><dd><TextState value={snapshot.account.reconciliationStatus} /></dd></div>
