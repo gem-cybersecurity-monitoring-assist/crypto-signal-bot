@@ -1,0 +1,89 @@
+name: Bitget UTA Read-Only Certification (manual, no trading)
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Inspect key/account first; certify only with the inspection hash"
+        required: true
+        type: choice
+        options: [inspect, certify]
+      account_alias:
+        description: "Non-sensitive exchange account alias (not a UID)"
+        required: true
+        type: string
+        default: "bitget-uta-owner"
+      product_id:
+        description: "Spot product for read-only contract checks"
+        required: true
+        type: string
+        default: "BTC-USDT"
+      expected_account_ref_hash:
+        description: "SHA-256 hash printed by a preceding inspect run (certify mode only)"
+        type: string
+        required: false
+        default: ""
+      acknowledge_read_only:
+        description: "I authorize read-only Bitget API queries; no orders or transfers"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bitget-uta-readonly-certification
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Restricted UTA provider read-only certification
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: bitget-readonly-certification
+
+    defaults:
+      run:
+        working-directory: worker
+        shell: bash
+
+    steps:
+      - name: Require reviewed default branch and explicit owner read-only acknowledgement
+        env:
+          ACK: ${{ inputs.acknowledge_read_only }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" != "refs/heads/main" || "$ACK" != "true" ]]; then
+            echo "Blocked: reviewed main-branch code and explicit read-only acknowledgement required"
+            exit 1
+          fi
+
+      - name: Checkout reviewed repository code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: worker/package-lock.json
+
+      - name: Install locked dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Check private UTA certification static safety
+        run: node scripts/verify-bitget-v3-private-certification-safety.mjs
+
+      - name: Perform authenticated private GET-only Bitget inspection or certification
+        env:
+          GEM_CERT_MODE: ${{ inputs.mode }}
+          GEM_CERT_ACCOUNT_REF: ${{ inputs.account_alias }}
+          GEM_CERT_PRODUCT_ID: ${{ inputs.product_id }}
+          GEM_CERT_EXPECTED_HASH: ${{ inputs.expected_account_ref_hash }}
+          GEM_CERT_ACKNOWLEDGED: ${{ inputs.acknowledge_read_only }}
+          BITGET_CERT_API_KEY: ${{ secrets.BITGET_CERT_API_KEY }}
+          BITGET_CERT_API_SECRET: ${{ secrets.BITGET_CERT_API_SECRET }}
+          BITGET_CERT_API_PASSPHRASE: ${{ secrets.BITGET_CERT_API_PASSPHRASE }}
+        run: node --experimental-sqlite --experimental-strip-types --no-warnings scripts/run-bitget-actions-readonly.mjs
