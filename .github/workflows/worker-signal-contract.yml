@@ -5,6 +5,8 @@ on:
     paths:
       - 'worker/src/**'
       - 'worker/tests/**'
+      - 'worker/migrations/**'
+      - 'worker/scripts/verify-live-candidate-migrations.mjs'
       - 'worker/scripts/run-bitget-actions-readonly.mjs'
       - 'worker/scripts/verify-bitget-actions-readonly-safety.mjs'
       - '.github/workflows/bitget-uta-readonly-certification.yml'
@@ -17,6 +19,8 @@ on:
     paths:
       - 'worker/src/**'
       - 'worker/tests/**'
+      - 'worker/migrations/**'
+      - 'worker/scripts/verify-live-candidate-migrations.mjs'
       - 'worker/scripts/run-bitget-actions-readonly.mjs'
       - 'worker/scripts/verify-bitget-actions-readonly-safety.mjs'
       - '.github/workflows/bitget-uta-readonly-certification.yml'
@@ -58,3 +62,8 @@ jobs:
           node scripts/verify-bitget-actions-readonly-safety.mjs
           node scripts/verify-bitget-v3-private-certification-safety.mjs
           node --experimental-sqlite --experimental-strip-types --no-warnings --test tests/live-bitget-actions-readonly.test.ts
+      - name: Rehearse recovery, accounting, and settlement
+        working-directory: worker
+        run: |
+          npm run test:live-foundation
+          npm run verify:migrations
