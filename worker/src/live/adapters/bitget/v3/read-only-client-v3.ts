@@ -59,6 +59,8 @@ export interface BitgetV3ReadOnlyClientOptions {
   now?: () => number
   timeoutMs?: number
   maxResponseBytes?: number
+  /** Require fresh provider timestamps for isolated authenticated certification. */
+  requireFreshResponseTime?: boolean
 }
 
 export interface BitgetV3AccountPermissions {
@@ -188,6 +190,7 @@ export class BitgetV3ReadOnlyClient {
   private readonly now: () => number
   private readonly timeoutMs: number
   private readonly maxResponseBytes: number
+  private readonly requireFreshResponseTime: boolean
 
   constructor(options: BitgetV3ReadOnlyClientOptions) {
     this.secretProvider = options.secretProvider
@@ -195,6 +198,7 @@ export class BitgetV3ReadOnlyClient {
     this.now = options.now ?? Date.now
     this.timeoutMs = options.timeoutMs ?? 8_000
     this.maxResponseBytes = options.maxResponseBytes ?? 1_000_000
+    this.requireFreshResponseTime = options.requireFreshResponseTime === true
     if (!Number.isInteger(this.timeoutMs) || this.timeoutMs < 100 || this.timeoutMs > 30_000) {
       throw new BitgetV3ReadOnlyClientError(
         'TIMEOUT_INVALID',
@@ -311,7 +315,22 @@ export class BitgetV3ReadOnlyClient {
           'Bitget V3 response is not valid JSON',
         )
       }
-      return parseBitgetV3Envelope(parsed)
+      const verified = parseBitgetV3Envelope(parsed)
+      if (this.requireFreshResponseTime) {
+        const envelope = verified as Record<string, unknown>
+        const requestTime = envelope.requestTime
+        // Every documented Bitget V3 response includes an integer requestTime.
+        // A successful HTTP/API code alone must not certify replayed responses.
+        const nowMs = this.now()
+        if (typeof requestTime !== 'number' || !Number.isSafeInteger(requestTime)
+          || requestTime < 1_000_000_000_000 || !Number.isSafeInteger(nowMs)
+          || requestTime > nowMs + 30_000 || nowMs - requestTime > 120_000) {
+          throw new BitgetV3ReadOnlyClientError(
+            'PROVIDER_RESPONSE_NOT_FRESH', 'Bitget V3 response timestamp is missing or out of bounds',
+          )
+        }
+      }
+      return verified
     } catch (error) {
       if (error instanceof BitgetV3ReadOnlyClientError) throw error
       if (controller.signal.aborted) {

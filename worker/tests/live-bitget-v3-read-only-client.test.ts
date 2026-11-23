@@ -263,3 +263,54 @@ test('V3 read-only product lookups scope GET queries to the reviewed Spot symbol
   await assert.rejects(client.getInstruments('SPOT', '!!'), /symbol/)
   assert.equal(observed.length, 2)
 })
+
+test('strict private V3 certification rejects stale, future, missing or forged provider requestTime', async () => {
+  const at = Date.parse('2026-11-23T12:50:00.000Z')
+  for (const requestTime of [undefined, null, '1760000000000', 1.5, NaN, 0,
+    at - 120_001, at + 30_001]) {
+    let requests = 0
+    const client = new BitgetV3ReadOnlyClient({
+      secretProvider: { async read() { return {
+        apiKey: 'test-key', secretKey: 'test-secret', passphrase: 'test-passphrase',
+      } } },
+      now: () => at, requireFreshResponseTime: true,
+      fetcher: async () => {
+        requests += 1
+        return jsonResponse({ code: '00000', requestTime, data: {} })
+      },
+    })
+    await assert.rejects(client.verifyReadOnlyPermissions(), (error: unknown) =>
+      error instanceof BitgetV3ReadOnlyClientError
+        && error.code === 'PROVIDER_RESPONSE_NOT_FRESH')
+    assert.equal(requests, 1, 'invalid account-info freshness must stop before account settings')
+  }
+})
+
+test('strict V3 client accepts provider timestamps inside explicit bounded clock-skew window', async () => {
+  const at = Date.parse('2026-11-23T12:50:00.000Z')
+  for (const requestTime of [at - 120_000, at - 30_000, at, at + 30_000]) {
+    let calls = 0
+    const client = new BitgetV3ReadOnlyClient({
+      secretProvider: { async read() { return {
+        apiKey: 'test-key', secretKey: 'test-secret', passphrase: 'test-passphrase',
+      } } },
+      now: () => at, requireFreshResponseTime: true,
+      fetcher: async () => {
+        calls += 1
+        return jsonResponse({
+          ...(calls === 1 ? INFO_FIXTURE : UNIFIED_SETTINGS),
+          requestTime,
+        })
+      },
+    })
+    const result = await client.verifyReadOnlyPermissions()
+    assert.equal(result.readOnly, true)
+    assert.equal(calls, 2)
+  }
+})
+
+test('strict response-time verification is opt-in for mock fixtures, not a provider permission bypass', async () => {
+  const client = testClient(async () => jsonResponse({ code: '00000', data: {} }))
+  const response = await client.getAccountAssets()
+  assert.deepEqual(response, { code: '00000', data: {} })
+})

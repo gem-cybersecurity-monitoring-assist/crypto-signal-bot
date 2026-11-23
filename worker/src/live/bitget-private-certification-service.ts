@@ -125,7 +125,8 @@ export async function routePrivateBitgetCertification(
     const material = await bounded(provider.read(),secretMs,'CERTIFICATION_SECRETS_TIMEOUT')
     if (uta) {
       const v3 = new BitgetV3ReadOnlyClient({ secretProvider: { read: async () => material },
-        fetcher: dependencies.fetcher, now: clock, timeoutMs: providerMs, maxResponseBytes: 131072 })
+        fetcher: dependencies.fetcher, now: clock, timeoutMs: providerMs, maxResponseBytes: 131072,
+        requireFreshResponseTime: true })
       const permissions = await v3.verifyReadOnlyPermissions()
       const accountRefHash = await canonicalHash(permissions.userId)
       if (!command) return reply({ code: 'CERTIFICATION_IDENTITY_INSPECTED', accountRefHash,

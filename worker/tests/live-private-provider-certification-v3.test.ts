@@ -7,7 +7,7 @@ import { BITGET_V3_ENDPOINTS } from '../src/live/adapters/bitget/v3/endpoints-v3
 const TOKEN = 'internal-uta-certification-token-123456789'
 const AT = Date.parse('2026-11-23T12:50:00.000Z')
 const UID = 'test-uta-identity-123'
-type FixtureOptions = { permType?: string; permissions?: string[]; settingsMode?: string; infoUserId?: string; history?: unknown; apiCode?: string }
+type FixtureOptions = { permType?: string; permissions?: string[]; settingsMode?: string; infoUserId?: string; history?: unknown; apiCode?: string; responseTime?: unknown }
 function fixture(options: FixtureOptions = {}) {
   const reads = { key: 0, secret: 0, passphrase: 0 }
   const paths: string[] = [], methods: string[] = []
@@ -42,7 +42,7 @@ function fixture(options: FixtureOptions = {}) {
       } else if (path === BITGET_V3_ENDPOINTS.orderHistory) {
         data = options.history ?? { list: [{ orderId: 'fake-history-1', category: 'SPOT', symbol: 'BTCUSDT' }] }
       } else throw new Error('unexpected request path')
-      return Response.json({ code: options.apiCode ?? '00000', data })
+      return Response.json({ code: options.apiCode ?? '00000', requestTime: options.responseTime === undefined ? AT : options.responseTime, data })
     },
   }
   return { env, dependencies, reads, paths, methods }
@@ -179,5 +179,19 @@ test('private inspection and certification distinguish the documented UTA hybrid
       assert.equal(certificationResult.withdrawalAllowed, false)
       assertRedacted(certificationResult)
     }
+  }
+})
+
+test('private UTA inspection blocks stale or missing response timestamps before secondary read', async () => {
+  for (const responseTime of [null, '1760000000000', AT - 120_001, AT + 30_001]) {
+    const f = fixture({ responseTime })
+    const response = await routePrivateBitgetCertification(request('inspect'), f.env, f.dependencies)
+    assert.equal(response.status, 503)
+    assert.deepEqual(f.paths, [BITGET_V3_ENDPOINTS.accountInfo])
+    const redacted = await body(response)
+    assert.equal(redacted.code, 'CERTIFICATION_PROVIDER_UNAVAILABLE')
+    assert.equal(redacted.certifiedForLive, false)
+    assert.equal(redacted.executionAllowed, false)
+    assertRedacted(redacted)
   }
 })
