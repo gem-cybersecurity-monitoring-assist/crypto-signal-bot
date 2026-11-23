@@ -83,9 +83,18 @@ export interface OperatorOperationalSummary {
   preparedAt: string | null;
 }
 
+export interface OperatorApiFamilyEvidence {
+  family: 'CLASSIC_SPOT_V2' | 'UTA_SPOT_V3' | 'UNKNOWN';
+  reviewStatus: 'REVIEW_COMPATIBLE' | 'BLOCKED';
+  sourceMode: 'ISOLATED_READ_ONLY_CLIENT';
+  observedAt: string;
+  evidenceHash: string;
+}
+
 export interface OperatorAccountSummary {
   accountId: string;
   productId: string | null;
+  apiFamilyEvidence: OperatorApiFamilyEvidence | null;
   certificationStatus: string | null;
   recoveryReadinessStatus: string | null;
   reconciliationStatus: string | null;
@@ -183,6 +192,33 @@ function operationalScenarios(value: unknown): OperatorOperationalScenarioSummar
       evidencePresent: record.evidencePresent === true,
       observedAt: stringValue(record.observedAt),
     });
+  });
+}
+
+function normalizeApiFamilyEvidence(value: unknown, generatedAt: string | null): OperatorApiFamilyEvidence | null {
+  const record = asRecord(value);
+  const family = record.family;
+  const reviewStatus = record.reviewStatus;
+  const observedAt = stringValue(record.observedAt);
+  const evidenceHash = stringValue(record.evidenceHash);
+  const generatedMs = Date.parse(generatedAt ?? '');
+  const observedMs = Date.parse(observedAt ?? '');
+  if (!['CLASSIC_SPOT_V2', 'UTA_SPOT_V3', 'UNKNOWN'].includes(String(family ?? ''))
+    || !['REVIEW_COMPATIBLE', 'BLOCKED'].includes(String(reviewStatus ?? ''))
+    || record.sourceMode !== 'ISOLATED_READ_ONLY_CLIENT'
+    || record.sourceVerified !== true
+    || !evidenceHash || !/^[a-f0-9]{64}$/.test(evidenceHash)
+    || !Number.isFinite(generatedMs) || !Number.isFinite(observedMs)
+    || observedMs > generatedMs || generatedMs - observedMs > 5 * 60 * 1000
+    || (reviewStatus === 'REVIEW_COMPATIBLE' && family !== 'CLASSIC_SPOT_V2')) {
+    return null;
+  }
+  return Object.freeze({
+    family: family as OperatorApiFamilyEvidence['family'],
+    reviewStatus: reviewStatus as OperatorApiFamilyEvidence['reviewStatus'],
+    sourceMode: 'ISOLATED_READ_ONLY_CLIENT',
+    observedAt: observedAt!,
+    evidenceHash,
   });
 }
 
@@ -295,6 +331,9 @@ export function normalizeOperatorReadinessSnapshot(value: unknown): OperatorRead
       ? Object.freeze({
           accountId: stringValue(accountRecord.accountId)!,
           productId: stringValue(accountRecord.productId),
+          apiFamilyEvidence: visibleResources.includes('CERTIFICATION')
+            ? normalizeApiFamilyEvidence(accountRecord.apiFamilyEvidence, stringValue(root.generatedAt))
+            : null,
           certificationStatus: stringValue(accountRecord.certificationStatus),
           recoveryReadinessStatus: stringValue(accountRecord.recoveryReadinessStatus),
           reconciliationStatus: stringValue(accountRecord.reconciliationStatus),
