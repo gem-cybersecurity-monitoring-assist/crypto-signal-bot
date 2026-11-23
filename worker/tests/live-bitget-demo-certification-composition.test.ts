@@ -6,6 +6,7 @@ import type { ProductRules } from '../src/live/domain.ts'
 import {
   BitgetDemoCertificationCompositionError,
   runComposedBitgetDemoPlaceCertification,
+  requireReviewedDemoAccountFamily,
   type BitgetDemoCertificationCompositionDependencies,
 } from '../src/live/adapters/bitget/demo-certification-composition.ts'
 import {
@@ -37,6 +38,12 @@ function productRules(): ProductRules {
 function dependencies(overrides: Partial<BitgetDemoCertificationCompositionDependencies<string>> = {}) {
   const events: string[] = []
   const value: BitgetDemoCertificationCompositionDependencies<string> = {
+    accountFamilyEvidenceSource: {
+      async loadVerified() {
+        events.push('account-family')
+        return null
+      },
+    },
     serializer: {
       async run<T>(_accountId: string, operation: () => Promise<T>): Promise<T> {
         events.push('serializer')
@@ -204,6 +211,126 @@ test('composition rejects an invalid injected clock before any authority is touc
       error instanceof BitgetDemoCertificationCompositionError
       && error.code === 'CLOCK_INVALID'
     ),
+  )
+  assert.deepEqual(injected.events, [])
+})
+
+async function familyReviewCandidate() {
+  return buildBitgetPlaceOrderCandidate({
+    request: {
+      productId: 'BTC-USDT',
+      side: 'BUY',
+      orderType: 'MARKET',
+      baseQuantity: null,
+      quoteNotional: asDecimalString('100'),
+      limitPrice: null,
+      stopPrice: null,
+    },
+    productRules: productRules(),
+    clientOrderId: 'demo-family-gate-0001',
+    previewHash: 'a'.repeat(64),
+    force: 'gtc',
+    builtAt: BUILT_AT,
+    expiresAt: EXPIRES_AT,
+  })
+}
+
+function mockFamilyEvidence(overrides: Record<string, unknown> = {}) {
+  return {
+    exchangeAccountId: 'bitget-demo-account-0001',
+    declaredFamily: 'CLASSIC_SPOT_V2' as const,
+    observedFamily: 'CLASSIC_SPOT_V2' as const,
+    observedAt: '2026-07-19T10:00:29.000Z',
+    reviewedContractRef: 'demo-family-review-1',
+    externallyVerifiedFamily: true,
+    externalEvidenceHash: 'c'.repeat(64),
+    ...overrides,
+  }
+}
+
+test('matching independently supplied Classic Spot fixture passes only the source-only family boundary', async () => {
+  const candidate = await familyReviewCandidate()
+  const observed: Array<Record<string, string>> = []
+  await requireReviewedDemoAccountFamily(candidate, 'bitget-demo-account-0001', '2026-07-19T10:00:30.000Z', {
+    async loadVerified(request) {
+      observed.push(request)
+      return mockFamilyEvidence()
+    },
+  })
+  assert.deepEqual(observed, [{
+    exchangeAccountId: 'bitget-demo-account-0001',
+    candidateHash: candidate.candidateHash,
+    evaluatedAt: '2026-07-19T10:00:30.000Z',
+  }])
+})
+
+test('incompatible family and stale or mismatched evidence block before signing or any D1 write', async () => {
+  const candidate = await familyReviewCandidate()
+  for (const override of [
+    { declaredFamily: 'UTA_SPOT_V3', observedFamily: 'UTA_SPOT_V3' },
+    { declaredFamily: 'UNKNOWN', observedFamily: 'UNKNOWN' },
+    { exchangeAccountId: 'wrong-account' },
+    { observedAt: '2026-07-19T09:40:00.000Z' },
+    { externalEvidenceHash: 'not-a-hash' },
+    { externallyVerifiedFamily: false },
+  ]) {
+    await assert.rejects(
+      requireReviewedDemoAccountFamily(
+        candidate, 'bitget-demo-account-0001', '2026-07-19T10:00:30.000Z',
+        { async loadVerified() { return mockFamilyEvidence(override) as never } },
+      ),
+      (error: unknown) => error instanceof BitgetDemoCertificationCompositionError
+        && error.code === 'ACCOUNT_FAMILY_REVIEW_BLOCKED',
+    )
+  }
+})
+
+test('missing family evidence, missing source and source exception always fail closed', async () => {
+  const candidate = await familyReviewCandidate()
+  await assert.rejects(
+    requireReviewedDemoAccountFamily(candidate, 'bitget-demo-account-0001', '2026-07-19T10:00:30.000Z',
+      { async loadVerified() { return null } }),
+    (error: unknown) => error instanceof BitgetDemoCertificationCompositionError
+      && error.code === 'ACCOUNT_FAMILY_REVIEW_BLOCKED',
+  )
+  await assert.rejects(
+    requireReviewedDemoAccountFamily(candidate, 'bitget-demo-account-0001', '2026-07-19T10:00:30.000Z',
+      null as never),
+    (error: unknown) => error instanceof BitgetDemoCertificationCompositionError
+      && error.code === 'ACCOUNT_FAMILY_SOURCE_REQUIRED',
+  )
+  await assert.rejects(
+    requireReviewedDemoAccountFamily(candidate, 'bitget-demo-account-0001', '2026-07-19T10:00:30.000Z',
+      { async loadVerified() { throw new Error('private upstream secret must not be exposed') } }),
+    (error: unknown) => error instanceof BitgetDemoCertificationCompositionError
+      && error.code === 'ACCOUNT_FAMILY_EVIDENCE_UNAVAILABLE'
+      && !error.message.includes('private upstream secret'),
+  )
+})
+
+test('tampered candidate cannot inherit an otherwise compatible account-family fixture', async () => {
+  const candidate = await familyReviewCandidate()
+  await assert.rejects(
+    requireReviewedDemoAccountFamily({
+      ...candidate,
+      unsignedBody: { ...candidate.unsignedBody, size: '1000000' },
+    }, 'bitget-demo-account-0001', '2026-07-19T10:00:30.000Z',
+    { async loadVerified() { return mockFamilyEvidence() } }),
+    (error: unknown) => error instanceof BitgetDemoCertificationCompositionError
+      && error.code === 'ACCOUNT_FAMILY_REVIEW_BLOCKED',
+  )
+})
+
+test('composition rejects missing family evidence-source before D1, credentials or network', async () => {
+  const candidate = await familyReviewCandidate()
+  const injected = dependencies({ accountFamilyEvidenceSource: null as never })
+  await assert.rejects(
+    runComposedBitgetDemoPlaceCertification(envThatMustNotBeRead(), {
+      authorizationId: 'demo-auth-gate-001', dispatchAttemptId: 'demo-attempt-gate-001',
+      candidate, controlBinding,
+    }, injected.value),
+    (error: unknown) => error instanceof BitgetDemoCertificationCompositionError
+      && error.code === 'ACCOUNT_FAMILY_SOURCE_REQUIRED',
   )
   assert.deepEqual(injected.events, [])
 })

@@ -3,6 +3,11 @@ import {
   type BitgetDemoCertificationOutcome,
 } from './demo-certification-runner.ts'
 import {
+  assessBitgetSpotFamily,
+  type BitgetFamilyObservation,
+} from './spot-family-review.ts'
+import type { BitgetUnsignedMutationCandidate } from './execution-candidate.ts'
+import {
   recordBitgetDemoPlaceControlBinding,
   createD1BitgetDemoFreshControlSource,
   type BitgetDemoGuardianScope,
@@ -52,7 +57,17 @@ export interface BitgetDemoCertificationCompositionInput
   }>
 }
 
+export interface BitgetDemoAccountFamilyEvidenceSource {
+  /** The caller must independently authenticate the source and account binding. */
+  loadVerified(input: Readonly<{
+    exchangeAccountId: string
+    candidateHash: string
+    evaluatedAt: string
+  }>): Promise<BitgetFamilyObservation | null>
+}
+
 export interface BitgetDemoCertificationCompositionDependencies<RateId> {
+  accountFamilyEvidenceSource: BitgetDemoAccountFamilyEvidenceSource
   serializer: BitgetDemoAccountDispatchSerializer
   credentialLeaseSource: BitgetDemoCredentialLeaseSource
   rateLimitNamespace: BitgetDemoRateLimitNamespace<RateId>
@@ -112,6 +127,13 @@ function clockIso(clock: BitgetDemoDispatchClock): string {
 function assertDependencies<RateId>(
   dependencies: BitgetDemoCertificationCompositionDependencies<RateId>,
 ): void {
+  if (!dependencies.accountFamilyEvidenceSource
+    || typeof dependencies.accountFamilyEvidenceSource.loadVerified !== 'function') {
+    throw new BitgetDemoCertificationCompositionError(
+      'ACCOUNT_FAMILY_SOURCE_REQUIRED',
+      'an independently verified account-family evidence source is required',
+    )
+  }
   if (!dependencies.serializer || typeof dependencies.serializer.run !== 'function') {
     throw new BitgetDemoCertificationCompositionError(
       'SERIALIZER_REQUIRED',
@@ -182,10 +204,56 @@ function assertCompositionOutcome(
 }
 
 /**
+ * Fail closed before a demo binding write, credential lease, rate-limit claim,
+ * or network call. An injected evidence source is not itself evidence of an
+ * account type; the caller must independently verify and bind its response.
+ */
+export async function requireReviewedDemoAccountFamily(
+  candidate: BitgetUnsignedMutationCandidate,
+  exchangeAccountId: string,
+  evaluatedAt: string,
+  source: BitgetDemoAccountFamilyEvidenceSource,
+): Promise<void> {
+  if (!source || typeof source.loadVerified !== 'function') {
+    throw new BitgetDemoCertificationCompositionError(
+      'ACCOUNT_FAMILY_SOURCE_REQUIRED', 'verified account-family evidence source required',
+    )
+  }
+  let observed: BitgetFamilyObservation | null
+  try {
+    observed = await source.loadVerified(Object.freeze({
+      exchangeAccountId, candidateHash: candidate.candidateHash, evaluatedAt,
+    }))
+  } catch {
+    throw new BitgetDemoCertificationCompositionError(
+      'ACCOUNT_FAMILY_EVIDENCE_UNAVAILABLE', 'account-family evidence could not be loaded',
+    )
+  }
+  const decision = await assessBitgetSpotFamily({
+    expectedExchangeAccountId: exchangeAccountId,
+    candidate,
+    account: observed as BitgetFamilyObservation,
+    evaluatedAt,
+  })
+  if (decision.status !== 'REVIEW_COMPATIBLE'
+    || decision.sourceOnly !== true
+    || decision.executionAllowed !== false
+    || decision.providerMutationAllowed !== false
+    || decision.mainnetAllowed !== false
+    || decision.withdrawalAllowed !== false
+    || decision.approvedEndpoint !== candidate.endpoint) {
+    throw new BitgetDemoCertificationCompositionError(
+      'ACCOUNT_FAMILY_REVIEW_BLOCKED', 'account-family evidence does not match the reviewed candidate',
+    )
+  }
+}
+
+/**
  * Source-only Bitget demo composition.
  *
  * No dependency is selected implicitly. The caller must inject the D1 evidence
- * environment, account serializer, callback-scoped demo credential source,
+ * environment, independently verified account-family source, account serializer,
+ * callback-scoped demo credential source,
  * account rate-limit namespace, GET-only recovery source, clock, and fetcher.
  * This module is not imported by a Worker entrypoint and has no route, trigger,
  * Wrangler binding, concrete secret name, default fetcher, live mode, or retry.
@@ -219,6 +287,12 @@ export async function runComposedBitgetDemoPlaceCertification<RateId>(
     authorizationId,
     dispatchAttemptId,
     evaluatedAt,
+  )
+  await requireReviewedDemoAccountFamily(
+    input.candidate,
+    reviewed.authorization.exchangeAccountId,
+    evaluatedAt,
+    dependencies.accountFamilyEvidenceSource,
   )
   const controlBinding = await recordBitgetDemoPlaceControlBinding(
     env,
