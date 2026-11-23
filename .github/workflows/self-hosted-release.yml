@@ -116,6 +116,10 @@ jobs:
           ALLOW_MAINNET: "false"
         run: npm run verify:paper-safety
 
+      - name: Test canonical Cloudflare token-scope preflight
+        working-directory: worker
+        run: node --test ../scripts/verify-cloudflare-token-scope.test.mjs
+
       - name: Validate Wrangler bundle with dry run
         working-directory: worker
         env:
@@ -135,7 +139,7 @@ jobs:
           TRADING_MODE: paper
           EXCHANGE_MODE: paper
           ALLOW_MAINNET: "false"
-        run: npx wrangler deploy
+        run: node ../scripts/verify-worker-deployment-target.mjs && node ../scripts/verify-cloudflare-token-scope.mjs && npx wrangler deploy
 
       - name: Smoke check Worker endpoints after deploy
         if: ${{ github.event.inputs.deploy_worker == 'true' }}
