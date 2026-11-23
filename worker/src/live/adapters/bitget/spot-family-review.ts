@@ -82,6 +82,14 @@ export async function assessBitgetSpotFamily(
     || family !== 'CLASSIC_SPOT_V2') {
     reasons.push('CANDIDATE_ENDPOINT_FAMILY_MISMATCH')
   }
+  // Family compatibility cannot revive an expired or future-created candidate.
+  // The candidate's own window is independently checked at review time.
+  const built = Date.parse(input.candidate?.builtAt ?? '')
+  const expires = Date.parse(input.candidate?.expiresAt ?? '')
+  if (!Number.isFinite(now) || !Number.isFinite(built) || !Number.isFinite(expires)
+    || built > now || expires <= now || expires <= built) {
+    reasons.push('CANDIDATE_VALIDITY_WINDOW_INACTIVE')
+  }
   if (input.candidate?.provider !== 'BITGET'
     || input.candidate?.method !== 'POST_EVIDENCE_ONLY') {
     reasons.push('INVALID_CANDIDATE_OR_METHOD')
