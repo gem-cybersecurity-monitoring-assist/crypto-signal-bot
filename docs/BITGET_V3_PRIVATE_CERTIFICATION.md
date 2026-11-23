@@ -47,7 +47,12 @@ secret is read, and the validated internal command requires
 `runId`, `exchangeAccountId`, `expectedAccountRefHash`, and `productId`.
 A caller must first perform the authenticated `inspect` step and bind the
 expected UID hash before `certify`. A UID mismatch fails before balances
-or history are requested.
+or history are requested. Inside the UTA certification harness, the
+read-only key and account-family check must **finish successfully before**
+any balance, position, instrument or order-history request is started.
+If permission checks fail, those five subsequent checks are explicitly
+`BLOCKED`, without contacting those provider endpoints. Local negative
+fixtures validate that no downstream requests occur.
 
 Three provider values (`BITGET_CERT_API_KEY`,
 `BITGET_CERT_API_SECRET`, `BITGET_CERT_API_PASSPHRASE`) are read **once per

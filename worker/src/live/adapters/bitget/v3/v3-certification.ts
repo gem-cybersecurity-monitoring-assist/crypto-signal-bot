@@ -132,17 +132,27 @@ export async function runBitgetV3ReadOnlyCertification(
   let positions: readonly BitgetV3PositionSnapshot[] = Object.freeze([])
   let products: readonly ExchangeProduct[] = Object.freeze([])
 
-  const checks = await Promise.all([
-    timed('READ_ONLY_PERMISSIONS', async () => {
+  // The permission check must settle before any account-data call is scheduled.
+  // Promise.all on all six checks would leak read attempts even for invalid keys.
+  const permissionCheck = await timed('READ_ONLY_PERMISSIONS', async () => {
       const permissions = await input.client.verifyReadOnlyPermissions()
-      if (!permissions.readOnly || !['hybrid','unified'].includes(permissions.accountMode) || !permissions.permissionsVerified) {
+      if (permissions.readOnly !== true
+        || !['hybrid', 'unified'].includes(permissions.accountMode)
+        || permissions.permissionsVerified !== true
+        || typeof permissions.userId !== 'string' || !permissions.userId.trim()
+        || !Array.isArray(permissions.authorities)
+        || !permissions.authorities.includes('uta_trade')
+        || !permissions.authorities.every(scope => scope === 'uta_trade' || scope === 'uta_mgt')) {
         throw new Error('V3 API key and UTA account family have not been verified')
       }
       return {
         reason: null,
         evidence: { userId: permissions.userId, accountMode: permissions.accountMode },
       }
-    }),
+  })
+
+  const downstreamChecks: readonly BitgetV3ReadOnlyCertificationCheck[] =
+    permissionCheck.status === 'PASS' ? await Promise.all([
     timed('ACCOUNT_ASSETS_CONTRACT', async () => {
       const raw = await input.client.getAccountAssets()
       unifiedAccountSnapshot = adapter.normalizeUnifiedAccount(raw, input.observedAt)
@@ -220,7 +230,17 @@ export async function runBitgetV3ReadOnlyCertification(
       if (rejected !== 3) throw new Error('read-only enforcement rejected fewer than expected')
       return { reason: null, evidence: { rejected } }
     }),
-  ])
+  ]) : await Promise.all(([
+    'ACCOUNT_ASSETS_CONTRACT', 'POSITION_CONTRACT', 'INSTRUMENTS_CONTRACT',
+    'ORDER_HISTORY_CONTRACT', 'READ_ONLY_ENFORCEMENT',
+  ] as const).map(async (name): Promise<BitgetV3ReadOnlyCertificationCheck> => ({
+    name,
+    status: 'BLOCKED',
+    reason: 'READ_ONLY_PERMISSIONS_NOT_VERIFIED',
+    latencyMs: 0,
+    evidenceHash: await canonicalHash({ name, blockedBy: 'READ_ONLY_PERMISSIONS' }),
+  })))
+  const checks = [permissionCheck, ...downstreamChecks]
 
   const failed = checks.filter((check) => check.status === 'FAIL')
   const blocked = checks.filter((check) => check.status === 'BLOCKED')

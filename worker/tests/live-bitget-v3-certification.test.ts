@@ -224,3 +224,79 @@ test('V3 certification requires runId and exchangeAccountId', async () => {
     /runId is required/,
   )
 })
+
+test('invalid UTA API permissions prevent every account-data call, including concurrent reads', async () => {
+  const called: string[] = []
+  const healthy = mockClient()
+  const client: BitgetV3ReadOnlyCertificationClient = {
+    ...healthy,
+    async verifyReadOnlyPermissions() {
+      called.push('verify')
+      await Promise.resolve()
+      throw new Error('invalid or write-enabled API key')
+    },
+    async getAccountAssets() { called.push('assets'); return ASSETS_FIXTURE },
+    async getCurrentPositions() { called.push('positions'); return POSITIONS_FIXTURE },
+    async getInstruments() { called.push('instruments'); return INSTRUMENTS_FIXTURE },
+    async getOrderHistory() { called.push('history'); return ORDER_HISTORY_FIXTURE },
+  }
+  const result = await runBitgetV3ReadOnlyCertification({ ...baseInput(), client })
+  assert.deepEqual(called, ['verify'])
+  assert.equal(result.status, 'FAILED')
+  assert.equal(result.checks[0].status, 'FAIL')
+  assert.deepEqual(result.checks.slice(1).map((check) => check.status), Array(5).fill('BLOCKED'))
+  assert.ok(result.checks.slice(1).every((check) =>
+    check.reason === 'READ_ONLY_PERMISSIONS_NOT_VERIFIED'
+      && check.latencyMs === 0
+      && /^[a-f0-9]{64}$/.test(check.evidenceHash),
+  ))
+  assert.equal(result.unifiedAccountSnapshot, null)
+  assert.equal(result.positionCount, 0)
+  assert.equal(result.productCount, 0)
+  assert.equal(result.certifiedForLive, false)
+  assert.equal(result.executionAllowed, false)
+})
+
+test('fabricated client permissions fail closed before any balance or order-history read', async () => {
+  for (const bad of [
+    { userId: '', readOnly: true, permissionsVerified: true, accountMode: 'hybrid', authorities: ['uta_trade'] },
+    { userId: 'some-id', readOnly: false, permissionsVerified: true, accountMode: 'hybrid', authorities: ['uta_trade'] },
+    { userId: 'some-id', readOnly: true, permissionsVerified: true, accountMode: 'hybrid', authorities: ['uta_trade', 'withdraw'] },
+    { userId: 'some-id', readOnly: true, permissionsVerified: false, accountMode: 'unified', authorities: ['uta_trade'] },
+    { userId: 'some-id', readOnly: true, permissionsVerified: true, accountMode: 'hybrid', authorities: [] },
+  ]) {
+    let reads = 0
+    const client: BitgetV3ReadOnlyCertificationClient = {
+      ...mockClient(),
+      async verifyReadOnlyPermissions() { return bad as never },
+      async getAccountAssets() { reads++; return ASSETS_FIXTURE },
+      async getCurrentPositions() { reads++; return POSITIONS_FIXTURE },
+      async getInstruments() { reads++; return INSTRUMENTS_FIXTURE },
+      async getOrderHistory() { reads++; return ORDER_HISTORY_FIXTURE },
+    }
+    const result = await runBitgetV3ReadOnlyCertification({ ...baseInput(), client })
+    assert.equal(reads, 0)
+    assert.equal(result.status, 'FAILED')
+    assert.equal(result.checks.filter(c => c.status === 'BLOCKED').length, 5)
+  }
+})
+
+test('valid permission verification precedes all UTA account reads', async () => {
+  const called: string[] = []
+  const client: BitgetV3ReadOnlyCertificationClient = {
+    ...mockClient(),
+    async verifyReadOnlyPermissions() {
+      called.push('verify')
+      await Promise.resolve()
+      return assertBitgetV3ReadOnlyAuthorities(SETTINGS_FIXTURE, INFO_FIXTURE)
+    },
+    async getAccountAssets() { called.push('assets'); return ASSETS_FIXTURE },
+    async getCurrentPositions() { called.push('positions'); return POSITIONS_FIXTURE },
+    async getInstruments() { called.push('instruments'); return INSTRUMENTS_FIXTURE },
+    async getOrderHistory() { called.push('history'); return ORDER_HISTORY_FIXTURE },
+  }
+  const result = await runBitgetV3ReadOnlyCertification({ ...baseInput(), client })
+  assert.equal(result.status, 'PASSED')
+  assert.equal(called[0], 'verify')
+  assert.deepEqual(new Set(called.slice(1)), new Set(['assets','positions','instruments','history']))
+})
