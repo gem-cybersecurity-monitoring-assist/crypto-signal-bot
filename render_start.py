@@ -1,7 +1,8 @@
-"""Universal Render startup shim — GEM Signal Bot LIVE MODE.
+"""Universal safe startup shim — paper/testnet only.
 
-Injects environment variables for $100 live test before starting the server.
-EXCHANGE_MODE=live | Bitget GEM-Bot key | Guardian: 10% max drawdown
+The Procfile is used by Render and Railway. Never let a hosting platform's
+missing or stale environment variables silently switch this service to live
+trading or mainnet.
 """
 
 from __future__ import annotations
@@ -10,36 +11,37 @@ import os
 import subprocess
 import sys
 
-# ── $100 Live Test Configuration ─────────────────────────────────────────────
-os.environ.setdefault("EXCHANGE_MODE",           "live")
-os.environ.setdefault("TRADING_MODE",            "live")   # runtime.py reads this
-os.environ.setdefault("EXCHANGE",                "bitget")
-os.environ.setdefault("NETWORK",                 "mainnet")
-os.environ.setdefault("ALLOW_MAINNET",           "true")
+# Fail closed regardless of stale host-level variables. This Python service is
+# paper-only; live execution, mainnet, and withdrawals are not enabled here.
+os.environ["EXCHANGE_MODE"] = "paper"
+os.environ["TRADING_MODE"] = "paper"  # backend/config/runtime.py reads this
+os.environ["NETWORK"] = "testnet"
+os.environ["ALLOW_MAINNET"] = "false"
+os.environ["LIVE_TRADING_ENABLED"] = "false"
+os.environ["WITHDRAWALS_ENABLED"] = "false"
 
-# Bitget credentials
-os.environ.setdefault("BITGET_API_KEY",          "")
-os.environ.setdefault("BITGET_API_SECRET",       "")
-os.environ.setdefault("BITGET_API_PASSPHRASE",   "")
-os.environ.setdefault("BITGET_PASSPHRASE",       "")   # pydantic field name
-
-# Capital cap — $100 live test
-os.environ.setdefault("LIVE_CAPITAL_CAP_USDT",   "100")
-os.environ.setdefault("EXECUTOR_POSITION_PCT",   "0.05")
-os.environ.setdefault("EXECUTOR_MAX_POSITIONS",  "4")
+# Paper execution defaults. These do not grant exchange write capability.
+os.environ.setdefault("EXCHANGE", "bitget")
+os.environ.setdefault("BITGET_API_KEY", "")
+os.environ.setdefault("BITGET_API_SECRET", "")
+os.environ.setdefault("BITGET_API_PASSPHRASE", "")
+os.environ.setdefault("BITGET_PASSPHRASE", "")  # pydantic field name
+os.environ.setdefault("PAPER_STARTING_BALANCE_USDT", "10000")
+os.environ.setdefault("EXECUTOR_POSITION_PCT", "0.05")
+os.environ.setdefault("EXECUTOR_MAX_POSITIONS", "4")
 os.environ.setdefault("EXECUTOR_MIN_CONFIDENCE", "0.80")
-os.environ.setdefault("EXECUTOR_INTERVAL",       "60")
+os.environ.setdefault("EXECUTOR_INTERVAL", "60")
 
-# Guardian — tight limits for live test
-os.environ.setdefault("GUARDIAN_MAX_DRAWDOWN_PCT",   "10")
+# Guardian thresholds remain conservative in the paper environment.
+os.environ.setdefault("GUARDIAN_MAX_DRAWDOWN_PCT", "10")
 os.environ.setdefault("GUARDIAN_MAX_DAILY_LOSS_PCT", "5")
-os.environ.setdefault("GUARDIAN_MAX_API_ERRORS",     "5")
-os.environ.setdefault("GUARDIAN_MAX_FAILED_ORDERS",  "3")
+os.environ.setdefault("GUARDIAN_MAX_API_ERRORS", "5")
+os.environ.setdefault("GUARDIAN_MAX_FAILED_ORDERS", "3")
 
-# Telegram alerts
+# Telegram alerts are optional and never required for startup.
 os.environ.setdefault("TELEGRAM_ALERTS_ENABLED", "true")
-os.environ.setdefault("TELEGRAM_CHANNEL_ID",     "-1003368597629")
-os.environ.setdefault("TELEGRAM_BOT_TOKEN",      "")
+os.environ.setdefault("TELEGRAM_CHANNEL_ID", "-1003368597629")
+os.environ.setdefault("TELEGRAM_BOT_TOKEN", "")
 
 # ── Server startup ────────────────────────────────────────────────────────────
 PORT = os.getenv("PORT", "10000")

@@ -1,5 +1,8 @@
 # Build Status
 
+> Latest snapshot: 2026-10-24 — see `docs/PROJECT_STATUS_2026-10-24.md`. All root and Worker
+> gates pass on `main` @ `70ec4e3` (frontend 51/51 tests); live D1/KV/R2 bindings verified.
+
 Status refreshed on 2026-08-25 from `main` baseline `2c9a890` plus the production auth and release hardening in this change.
 
 ## Verified locally

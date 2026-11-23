@@ -4,6 +4,7 @@ import {
   handleAgentContextRequest,
   type AgentContextEnv,
 } from './agent-context'
+import { PAPER_BALANCE_SEED_SQL } from './paper-balance-seed'
 
 type RuntimeEnv = AgentContextEnv & {
   EXECUTION_EXCHANGE_PRIMARY?: string
@@ -77,8 +78,7 @@ const PAPER_SCHEMA_STATEMENTS = [
   )`,
   `INSERT OR IGNORE INTO guardian_state (id, triggered, reason, error_count, drawdown_pct)
     VALUES (1, 0, NULL, 0, 0.0)`,
-  `INSERT OR IGNORE INTO portfolio (symbol, side, quantity, entry_price, current_price, pnl, status)
-    VALUES ('USDT', 'balance', 10000, 1.0, 1.0, 0, 'balance')`,
+  PAPER_BALANCE_SEED_SQL,
   `INSERT OR IGNORE INTO circuit_breaker_state (source, open, fail_count) VALUES ('btcc', 0, 0)`,
   `INSERT OR IGNORE INTO circuit_breaker_state (source, open, fail_count) VALUES ('bitget', 0, 0)`,
   `INSERT OR IGNORE INTO circuit_breaker_state (source, open, fail_count) VALUES ('coinbase', 0, 0)`,
@@ -180,7 +180,35 @@ async function handleOneShotPaperDemo(
     return Response.json({ ok: false, error: 'server_operator_key_not_configured' }, { status: 503 })
   }
 
+  const bearer = request.headers.get('Authorization')?.trim() ?? ''
+  if (!/^Bearer\s+\S+$/i.test(bearer)) {
+    return Response.json({ ok: false, error: 'authentication_required' }, { status: 401 })
+  }
+
   const origin = url.origin
+  const access = await workerJson(origin, '/v1/management/me', env, ctx, {
+    headers: { Accept: 'application/json', Authorization: bearer },
+  })
+  const profile = access.body?.profile as Record<string, unknown> | undefined
+  const roles = Array.isArray(access.body?.roles)
+    ? access.body.roles as Array<Record<string, unknown>>
+    : []
+  const hasGlobalTrader = roles.some((grant) =>
+    grant.role === 'TRADER'
+    && grant.scope_type === 'GLOBAL'
+    && grant.scope_key === 'global'
+  )
+  if (
+    !access.response.ok
+    || profile?.status !== 'ACTIVE'
+    || access.body?.access_allowed !== true
+    || !hasGlobalTrader
+  ) {
+    return Response.json({ ok: false, error: 'active_global_trader_role_required' }, {
+      status: access.response.status === 401 ? 401 : 403,
+    })
+  }
+
   const [health, runtime, guardian, portfolio] = await Promise.all([
     workerJson(origin, '/health', env, ctx),
     workerJson(origin, '/runtime/status', env, ctx),

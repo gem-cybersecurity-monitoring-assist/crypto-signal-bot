@@ -46,6 +46,9 @@ jobs:
           name: Test frontend
           command: npm run test:run
       - run:
+          name: Test authenticated paper demo proxy
+          command: node --test tests/paper-demo-proxy.test.mjs
+      - run:
           name: Build frontend
           environment:
             VITE_BACKEND_URL: /api

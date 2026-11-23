@@ -82,9 +82,11 @@ for (const pattern of [
 }
 
 for (const sourcePath of sourceFiles('worker/src')) {
-  if (sourcePath === modulePath || sourcePath === runtimeAdapterPath) continue
+  // Normalize Windows path separators before repository-relative allowlist comparisons.
+  const normalizedSourcePath = sourcePath.split(path.sep).join('/')
+  if (normalizedSourcePath === modulePath || normalizedSourcePath === runtimeAdapterPath) continue
   if (/demo-rate-limit-authority\.ts/.test(read(sourcePath))) {
-    failures.push(`${sourcePath} must not import the isolated demo rate-limit authority`)
+    failures.push(`${normalizedSourcePath} must not import the isolated demo rate-limit authority`)
   }
 }
 

@@ -1,8 +1,8 @@
 import { pathToFileURL } from 'node:url';
 
-// Verified through the canonical account's Worker, KV and D1 APIs on 2026-10-04.
-// Account IDs are public infrastructure identifiers, not credentials. A future
-// account migration must update this target in a reviewed change.
+// Verified against the canonical Analyzer account. This is a public infrastructure
+// identifier, not a credential. Never infer the deployment account from a Worker
+// runtime variable: it must be selected explicitly by the deployment environment.
 export const CANONICAL_WORKER_ACCOUNT_ID = 'd944e40760494a6843e521cd57c15dfd';
 
 export function verifyWorkerDeploymentTarget(environment = process.env) {

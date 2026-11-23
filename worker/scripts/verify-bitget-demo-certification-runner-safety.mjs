@@ -125,15 +125,17 @@ for (const pattern of [
 }
 
 for (const sourcePath of sourceFiles('worker/src')) {
+  // Normalize Windows path separators before repository-relative allowlist comparisons.
+  const normalizedSourcePath = sourcePath.split(path.sep).join('/')
   if (
-    sourcePath === modulePath
-    || sourcePath === certificationStorePath
-    || sourcePath === runtimeAdapterPath
-    || sourcePath === controlBindingStorePath
-    || sourcePath === compositionPath
+    normalizedSourcePath === modulePath
+    || normalizedSourcePath === certificationStorePath
+    || normalizedSourcePath === runtimeAdapterPath
+    || normalizedSourcePath === controlBindingStorePath
+    || normalizedSourcePath === compositionPath
   ) continue
   if (/demo-certification-runner\.ts/.test(read(sourcePath))) {
-    failures.push(`${sourcePath} must not import the source-only demo certification runner`)
+    failures.push(`${normalizedSourcePath} must not import the source-only demo certification runner`)
   }
 }
 

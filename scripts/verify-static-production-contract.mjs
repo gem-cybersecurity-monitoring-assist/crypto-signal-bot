@@ -127,6 +127,23 @@ assert(wrangler.includes(CURRENT_FRONTEND), 'canonical frontend is missing from 
 assert(Array.isArray(vercel.alias) && vercel.alias.includes('crypto-signal-bot-indol.vercel.app'), 'canonical Vercel alias is missing');
 assert(vercel.framework === 'vite', 'Vercel framework must remain Vite');
 assert(vercel.buildCommand === 'npm run build', 'Vercel must execute the guarded npm build command');
+const globalSecurityHeaders = vercel.headers?.find((rule) => rule.source === '/(.*)')?.headers ?? [];
+for (const header of ['X-Content-Type-Options', 'X-Frame-Options', 'Referrer-Policy', 'Permissions-Policy', 'Content-Security-Policy']) {
+  assert(globalSecurityHeaders.some((item) => item.key === header), `global security header ${header} is missing`);
+}
+const contentSecurityPolicy = globalSecurityHeaders.find((item) => item.key === 'Content-Security-Policy')?.value ?? '';
+for (const directive of [
+  "default-src 'self'",
+  "object-src 'none'",
+  "frame-ancestors 'none'",
+  "script-src 'self'",
+  'https://crypto-signal-bot-api.analyzer-d94.workers.dev',
+  'https://pxcahgcoeewvkhsdvylu.supabase.co',
+  'https://api.coingecko.com',
+]) {
+  assert(contentSecurityPolicy.includes(directive), `Content Security Policy directive/source ${directive} is missing`);
+}
+assert(!contentSecurityPolicy.includes("'unsafe-eval'"), 'Content Security Policy must not enable unsafe-eval');
 
 assert(pkg.scripts?.build?.includes('verify:production-contract'), 'production drift verifier must gate frontend builds');
 assert(pkg.scripts?.build?.includes('verify:usage-management'), 'usage-management verifier must gate frontend builds');

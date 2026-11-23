@@ -1,0 +1,48 @@
+name: Worker signal contract tests
+
+on:
+  pull_request:
+    paths:
+      - 'worker/src/**'
+      - 'worker/tests/**'
+      - 'worker/package.json'
+      - 'worker/package-lock.json'
+      - 'worker/vitest.config.ts'
+      - '.github/workflows/worker-signal-contract.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'worker/src/**'
+      - 'worker/tests/**'
+      - 'worker/package.json'
+      - 'worker/package-lock.json'
+      - 'worker/vitest.config.ts'
+      - '.github/workflows/worker-signal-contract.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  signal-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.12.0'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            worker/package-lock.json
+      - name: Install root dependencies
+        run: npm ci
+      - name: Install Worker dependencies
+        run: npm --prefix worker ci
+      - name: Type-check Worker
+        run: npm --prefix worker run build
+      - name: Run Worker contract tests
+        run: npm run test:worker
+      - name: Verify paper-only safety
+        run: npm --prefix worker run verify:paper-safety

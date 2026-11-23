@@ -16,6 +16,7 @@
 
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
+import { buildSignalFreshnessMetadata } from './signals/freshness.ts'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -324,7 +325,7 @@ async function isHaltedForMutation(env: Env): Promise<boolean> {
 
 async function getBalance(env: Env): Promise<number> {
   const row = await env.DB.prepare(
-    "SELECT id, quantity FROM portfolio WHERE symbol = 'USDT' AND status = 'balance' LIMIT 1"
+    "SELECT id, quantity FROM portfolio WHERE symbol = 'USDT' AND status = 'balance' ORDER BY id ASC LIMIT 1"
   ).first<{ id: number; quantity: number }>().catch(() => null)
   if (row?.quantity !== undefined) return n(row.quantity, 10000)
   const starting = n(env.PAPER_STARTING_BALANCE_USDT, 10000)
@@ -336,7 +337,7 @@ async function getBalance(env: Env): Promise<number> {
 
 async function setBalance(env: Env, value: number): Promise<void> {
   const row = await env.DB.prepare(
-    "SELECT id FROM portfolio WHERE symbol = 'USDT' AND status = 'balance' LIMIT 1"
+    "SELECT id FROM portfolio WHERE symbol = 'USDT' AND status = 'balance' ORDER BY id ASC LIMIT 1"
   ).first<{ id: number }>().catch(() => null)
   if (row?.id) {
     await env.DB.prepare('UPDATE portfolio SET quantity = ? WHERE id = ?').bind(value, row.id).run()
@@ -807,7 +808,7 @@ app.get('/signal/latest', async (c) => {
     'SELECT * FROM signals WHERE symbol = ? ORDER BY created_at DESC LIMIT 1'
   ).bind(symbol).first<SignalRow>().catch(() => null)
 
-  if (row) return c.json({ ...row, action: row.side, signal: row.side, available: true, ...safeRuntime(c.env), ts: ts() })
+  if (row) return c.json({ ...row, action: row.side, signal: row.side, available: true, ...buildSignalFreshnessMetadata({ sourceKind: 'persisted', symbol, signalId: row.id, signalCreatedAt: row.created_at }), ...safeRuntime(c.env), ts: ts() })
 
   // Generate live signal from price action
   const px      = await resolvePrice(c.env, symbol)
@@ -824,13 +825,21 @@ app.get('/signal/latest', async (c) => {
     if (emaFast < emaSlow * 0.998) { side = 'SELL'; confidence = 0.65 }
   }
 
+  const latestSnapshot = await c.env.DB.prepare(
+    'SELECT id, price, source, stale, created_at FROM market_snapshots WHERE symbol = ? ORDER BY created_at DESC LIMIT 1'
+  ).bind(symbol).first<{ id: number; price: number; source: string; stale: number | boolean; created_at: string }>().catch(() => null)
+  const freshness = buildSignalFreshnessMetadata({
+    sourceKind: 'derived', symbol, side, priceSource: px.source,
+    entryPrice: px.price, priceIsStale: px.stale, snapshot: latestSnapshot,
+  })
+
   return c.json({
     symbol, timeframe: '5m', side, action: side, signal: side,
     confidence, entry_price: px.price,
     stop_loss: side === 'BUY' ? px.price * 0.98 : null,
     take_profit: side === 'BUY' ? px.price * 1.04 : null,
     strategy: 'worker_ema_crossover', available: true,
-    price_source: px.source,
+    ...freshness,
     ...safeRuntime(c.env), ts: ts(),
   })
 })

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import {
   Activity,
   CheckCircle2,
+  CirclePlay,
   Loader2,
   LogOut,
   Settings,
@@ -14,7 +15,7 @@ import { Button } from '@/components/ui/button';
 import { useAuth, isSupabaseConfigured as SUPABASE_CONFIGURED } from '@/context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
-import { fetchBackendJson } from '@/lib/backend';
+import { describePaperExecutionError, fetchBackendJson } from '@/lib/backend';
 import { PAPER_DASHBOARD_ROUTES } from '@/lib/paperDashboardRoutes';
 
 interface HeaderProps {
@@ -194,7 +195,7 @@ export function Header({
         throw new Error(`Paper trade blocked because portfolio mode is ${runtimeMode || 'unknown'}.`);
       }
 
-      const priceSnapshot = await fetchBackendJson<PaperPriceSnapshot>('/price?symbol=BTCUSDT', {
+      const priceSnapshot = await fetchBackendJson<PaperPriceSnapshot>('/market/price/BTCUSDT', {
         method: 'GET',
         cache: 'no-store',
       });
@@ -203,10 +204,10 @@ export function Header({
         throw new Error('BTC paper reference price is unavailable.');
       }
 
-      // The default certification wallet is 10,000 USDT. Use a bounded 5% test
-      // position so the trade is large enough to visibly exercise cash, order,
-      // position and audit flows without consuming the full demo portfolio.
-      const testNotional = Math.min(500, cashBefore * 0.05);
+      // Keep the test below the Worker paper-entry cap (2% of equity).
+      // Use 1.5% to leave room for rounding and ensure this remains a small
+      // certification trade; it never touches real funds.
+      const testNotional = Math.min(150, cashBefore * 0.015);
       if (testNotional < 10) {
         throw new Error('Paper balance is too small for the certification trade test.');
       }
@@ -261,7 +262,7 @@ export function Header({
 
       toast.success(`Paper BTC test filled for ${currencyFormatter.format(actualNotional)} from the demo wallet.`);
     } catch (cause) {
-      const message = cause instanceof Error ? cause.message : 'Paper trade test failed.';
+      const message = describePaperExecutionError(cause, 'Paper trade test failed.');
       setPaperTradeTest({
         running: false,
         ranAt: new Date().toISOString(),
@@ -386,6 +387,16 @@ export function Header({
               <span className="hidden lg:inline">
                 {paperTradeTest.running ? 'Paper trade…' : 'Test Paper Trade'}
               </span>
+            </Button>
+
+            <Button
+              variant="outline"
+              onClick={() => navigate('/demo')}
+              className="h-9 gap-2 border-primary/40 bg-primary/10 px-3 text-primary hover:bg-primary/15"
+              title="Open narrated dashboard demo"
+            >
+              <CirclePlay className="h-4 w-4" />
+              <span className="hidden md:inline">Demo</span>
             </Button>
 
             <Button
