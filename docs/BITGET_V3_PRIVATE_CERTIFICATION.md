@@ -15,18 +15,19 @@ It contains no order-placement, cancellation, transfer or withdrawal transport.
   and `permissions`.
 - UTA account settings: same official catalog,
   `GET /api/v3/account/settings` includes `uid`,
-  `accountMode`; the documented example uses `hybrid`, **not**
-  the old mock-only `unified` sentinel.
+  `accountMode`; the documented account modes include both `hybrid` and `unified`;
+  switching/upgrading modes are not eligible.
 - UTA Spot order history:
   https://www.bitget.com/docs/catalog/trading/order-management
   `GET /api/v3/trade/history-orders?category=SPOT&limit=10`.
 - UTA migration and route differences:
   https://www.bitget.com/docs/classic/uta-api-upgrade-guide
 
-This specific reviewer accepts a read-only API key with `uta_trade` and
+This reviewer accepts provider read-only variants `readonly` and `read-only`,
+  with `uta_trade` and
 optionally `uta_mgt`, and **rejects** `read-and-write`, `withdraw`,
 unknown permissions, a mismatched UID, and account settings outside
-the reviewed `hybrid` mode. This conservative contract may require further
+the documented `hybrid` or `unified` modes. This conservative contract may require further
 review for legitimate but unrecognized provider account configurations.
 
 ### Private, authenticated service-binding endpoints

@@ -118,7 +118,7 @@ test('UTA missing/writable/withdrawal/unknown authorities, mismatched UID and wr
   const bad: FixtureOptions[] = [
     { permType: 'read-and-write' }, { permissions: ['uta_trade', 'withdraw'] },
     { permissions: ['uta_trade', 'unknown_write'] }, { permissions: ['uta_mgt'] },
-    { infoUserId: 'wrong-uid' }, { settingsMode: 'classic' }, { settingsMode: 'unified' },
+    { infoUserId: 'wrong-uid' }, { settingsMode: 'classic' },
     { apiCode: '' },
   ]
   for (const options of bad) {
@@ -155,4 +155,29 @@ test('UTA unauthorized and unsafe routes fail before credential read or provider
     new Request('https://private-service/internal/bitget/uta/place-order', {method:'POST'}), f.env, f.dependencies)
   assert.equal(response.status, 404)
   assert.equal(f.paths.length, 0)
+})
+
+test('private inspection and certification distinguish the documented UTA hybrid and unified modes', async () => {
+  for (const mode of ['hybrid', 'unified'] as const) {
+    for (const permType of ['readonly', 'read-only'] as const) {
+      const f = fixture({ settingsMode: mode, permType })
+      const inspection = await routePrivateBitgetCertification(
+        request('inspect'), f.env, f.dependencies)
+      const inspectionResult = await body(inspection)
+      assert.equal(inspection.status, 200)
+      assert.equal(inspectionResult.accountModel, mode === 'hybrid' ? 'UTA_HYBRID' : 'UTA_UNIFIED')
+      assert.equal(inspectionResult.permissionsVerified, true)
+      assert.equal(inspectionResult.executionAllowed, false)
+      assertRedacted(inspectionResult)
+      const certification = await routePrivateBitgetCertification(
+        request('certify', await command()), f.env, f.dependencies)
+      const certificationResult = await body(certification)
+      assert.equal(certification.status, 200)
+      assert.equal(certificationResult.result.status, 'PASSED')
+      assert.equal(certificationResult.accountModel, mode === 'hybrid' ? 'UTA_HYBRID' : 'UTA_UNIFIED')
+      assert.equal(certificationResult.result.certifiedForLive, false)
+      assert.equal(certificationResult.withdrawalAllowed, false)
+      assertRedacted(certificationResult)
+    }
+  }
 })

@@ -26,7 +26,8 @@ const locks = Object.freeze({ certifiedForLive: false, providerMutationAllowed: 
 const reply = (payload: Record<string, unknown>, status: number, contract = 'BITGET_CLASSIC_SPOT_V2') => Response.json({
   ...payload, ...locks, contract,
   accountModel: contract === 'BITGET_UTA_V3' && payload.accountModelVerified === true
-    ? 'UTA_HYBRID' : 'UNVERIFIED',
+    && (payload.accountMode === 'hybrid' || payload.accountMode === 'unified')
+    ? (payload.accountMode === 'hybrid' ? 'UTA_HYBRID' : 'UTA_UNIFIED') : 'UNVERIFIED',
 }, {
   status, headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },
 })
@@ -129,6 +130,7 @@ export async function routePrivateBitgetCertification(
       const accountRefHash = await canonicalHash(permissions.userId)
       if (!command) return reply({ code: 'CERTIFICATION_IDENTITY_INSPECTED', accountRefHash,
         permissionsVerified: permissions.permissionsVerified, accountModelVerified: true,
+        accountMode: permissions.accountMode,
         authorityCount: permissions.authorities.length,
         authoritiesHash: await canonicalHash(permissions.authorities) }, 200, 'BITGET_UTA_V3')
       if (accountRefHash !== command.expectedAccountRefHash) {
@@ -145,7 +147,8 @@ export async function routePrivateBitgetCertification(
       if (completed < started || completed - started > 65000) fail('CERTIFICATION_RUN_STALE')
       // Never serialize account balances, positions, UID, provider raw errors or secrets.
       return reply({ code: 'CERTIFICATION_CONTRACTS_EVALUATED', accountRefHash,
-        accountModelVerified: true, runDurationMs: completed - started,
+        accountModelVerified: true, accountMode: permissions.accountMode,
+        runDurationMs: completed - started,
         result: {
           runId: result.runId, status: result.status, apiVersion: result.apiVersion,
           checks: result.checks.map(c => ({ name: c.name, status: c.status,

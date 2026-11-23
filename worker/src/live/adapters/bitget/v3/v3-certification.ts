@@ -135,7 +135,7 @@ export async function runBitgetV3ReadOnlyCertification(
   const checks = await Promise.all([
     timed('READ_ONLY_PERMISSIONS', async () => {
       const permissions = await input.client.verifyReadOnlyPermissions()
-      if (!permissions.readOnly || permissions.accountMode !== 'hybrid' || !permissions.permissionsVerified) {
+      if (!permissions.readOnly || !['hybrid','unified'].includes(permissions.accountMode) || !permissions.permissionsVerified) {
         throw new Error('V3 API key and UTA account family have not been verified')
       }
       return {
