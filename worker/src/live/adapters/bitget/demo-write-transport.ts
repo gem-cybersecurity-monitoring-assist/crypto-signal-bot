@@ -366,7 +366,7 @@ function assertUnsignedBody(candidate: BitgetUnsignedMutationCandidate): void {
   }
   const oldIdentityCount = Number(Boolean(body.orderId)) + Number(Boolean(body.clientOid))
   if (candidate.operation === 'PLACE') {
-    if (!body.side || !body.orderType || !body.force || !body.clientOid || !body.size) {
+    if (!body.side || !body.orderType || !body.clientOid || !body.size) {
       throw new BitgetDemoWriteTransportError('CANDIDATE_BODY_INVALID', 'Place candidate body is incomplete')
     }
     if (!['buy', 'sell'].includes(body.side) || !['market', 'limit'].includes(body.orderType)) {
@@ -374,6 +374,12 @@ function assertUnsignedBody(candidate: BitgetUnsignedMutationCandidate): void {
     }
     if ((body.orderType === 'limit') !== Boolean(body.price)) {
       throw new BitgetDemoWriteTransportError('CANDIDATE_BODY_INVALID', 'Place price does not match order type')
+    }
+    if (body.orderType === 'market' && body.force !== undefined) {
+      throw new BitgetDemoWriteTransportError('CANDIDATE_BODY_INVALID', 'Classic Spot market orders cannot include force')
+    }
+    if (body.orderType === 'limit' && !['gtc', 'post_only', 'fok', 'ioc'].includes(body.force ?? '')) {
+      throw new BitgetDemoWriteTransportError('CANDIDATE_BODY_INVALID', 'Limit orders require a reviewed force value')
     }
   } else if (candidate.operation === 'CANCEL') {
     if (oldIdentityCount !== 1) {

@@ -192,7 +192,6 @@ function placeBody(input: BuildBitgetPlaceCandidateInput): Readonly<Record<strin
     symbol: normalizeBitgetSymbol(request.productId),
     side: request.side.toLowerCase(),
     orderType: request.orderType.toLowerCase(),
-    force: input.force,
     clientOid: normalizeClientOrderId(input.clientOrderId),
   }
 
@@ -210,6 +209,8 @@ function placeBody(input: BuildBitgetPlaceCandidateInput): Readonly<Record<strin
 
   if (request.orderType === 'LIMIT') {
     if (request.limitPrice === null) throw new TypeError('Bitget limit candidate requires limitPrice')
+    // Classic Spot v2 marks force as invalid for market orders.
+    body.force = input.force
     body.price = request.limitPrice
   } else if (request.limitPrice !== null) {
     throw new TypeError('Bitget market candidate must not contain limitPrice')
@@ -279,10 +280,6 @@ export async function buildBitgetPlaceOrderCandidate(
     'mandatory_read_only_recovery',
     'no_automatic_retry',
   ]
-  if (input.request.orderType === 'MARKET') {
-    warnings.push('market_force_contract_requires_final_provider_verification')
-  }
-
   return finalizeCandidate(baseCandidateEvidence({
     operation: 'PLACE',
     endpoint: BITGET_MUTATION_EVIDENCE_ENDPOINTS.placeOrder,

@@ -128,6 +128,7 @@ test('place candidate preserves market-buy quote sizing and permanent locks', as
   assert.equal(candidate.unsignedBody.orderType, 'market')
   assert.equal(candidate.unsignedBody.size, '100')
   assert.equal(candidate.unsignedBody.clientOid, 'candidate-order-0001')
+  assert.equal('force' in candidate.unsignedBody, false)
   assert.equal('previewHash' in candidate.unsignedBody, false)
   assert.equal(candidate.evidenceBindings.previewHash, 'a'.repeat(64))
   assert.equal(candidate.evidenceBindings.replacementCandidateHash, null)
@@ -344,4 +345,18 @@ test('candidate adapter permanently throws for every submission method', () => {
   assert.throws(() => adapter.submitPlaceOrder(), /execution-locked/)
   assert.throws(() => adapter.submitCancelOrder(), /execution-locked/)
   assert.throws(() => adapter.submitCancelReplaceOrder(), /execution-locked/)
+})
+
+test('Classic Spot limit place retains an explicit force value while market place omits it', async () => {
+  const market = await buildBitgetPlaceOrderCandidate(placeInput())
+  const limit = await buildBitgetPlaceOrderCandidate({
+    ...placeInput(),
+    request: limitBuyRequest(),
+    clientOrderId: 'candidate-limit-order-0003',
+  })
+  assert.equal('force' in market.unsignedBody, false)
+  assert.equal('price' in market.unsignedBody, false)
+  assert.equal(limit.unsignedBody.force, 'gtc')
+  assert.equal(limit.unsignedBody.price, '50000')
+  assert.equal(limit.providerMutationAllowed, false)
 })
