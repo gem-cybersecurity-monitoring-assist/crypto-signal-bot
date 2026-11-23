@@ -52,8 +52,10 @@ export function assessShadowRisk(
   if (market.action !== 'entry') reasons.push('ENTRY_ONLY')
   const authorization = authorizeMarketAction(market)
   if (!authorization.allowed) reasons.push(authorization.code)
-  if (!Number.isFinite(limits.nowMs) || features.sourceAgeMs < 0
-    || features.sourceAgeMs > 500) reasons.push('SOURCE_NOT_FRESH')
+  const sourceAgeMs = limits.nowMs - features.exchangeTsMs
+  if (!Number.isFinite(sourceAgeMs) || !Number.isFinite(features.sourceAgeMs)
+    || features.sourceAgeMs < 0 || sourceAgeMs < features.sourceAgeMs
+    || sourceAgeMs > 500) reasons.push('SOURCE_NOT_FRESH')
   if (limits.guardian !== 'CLEAR') reasons.push('GUARDIAN_NOT_CLEAR')
   if (!Number.isFinite(limits.cooldownUntilMs)
     || limits.nowMs < limits.cooldownUntilMs) reasons.push('COOLDOWN_ACTIVE')

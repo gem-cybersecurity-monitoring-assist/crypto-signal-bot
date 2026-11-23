@@ -21,7 +21,7 @@ function book(sequence: number, bid = 100, ask = 100.04): NormalizedMarketEvent 
 
 function accepted(event: NormalizedMarketEvent): FeedUpdateResult {
   return {
-    accepted: true, reason: 'accepted',
+    accepted: true, reason: 'accepted', eventId: event.eventId,
     state: {
       source: event.source, channel: event.channel, symbol: event.symbol,
       connectionState: 'connected', integrityState: 'healthy',
@@ -96,6 +96,13 @@ describe('Phase 3 shadow features — no execution boundary', () => {
     }
   })
 
+  it('rejects healthy feed acceptance for a different event on the same stream', () => {
+    const first = book(1)
+    const second = book(2)
+    const engine = new ShadowFeatureEngine()
+    expect(engine.observe(second, accepted(first), 'live', second.receivedTsMs)).toBeNull()
+  })
+
   it('resets prior momentum after unhealthy data and refuses crossed books or duplicate identifiers', () => {
     const engine = new ShadowFeatureEngine()
     const first = book(1)
@@ -138,6 +145,20 @@ describe('Phase 3 shadow features — no execution boundary', () => {
 })
 
 describe('Phase 3 scouts, fusion, and simulated risk', () => {
+  it('rejects a snapshot that expires before the risk decision', () => {
+    const features = featuresForTwo()
+    const candidate = fuseShadowScouts(features, evaluateShadowScouts(features))
+    expect(assessShadowRisk(features, candidate, validMarket, validLimits).status)
+      .toBe('SHADOW_ELIGIBLE')
+    const expired = assessShadowRisk(features, candidate, validMarket, {
+      ...validLimits,
+      nowMs: features.exchangeTsMs + 501,
+    })
+    expect(expired.status).toBe('BLOCKED')
+    expect(expired.simulatedNotional).toBe(0)
+    expect(expired.reasonCodes).toContain('SOURCE_NOT_FRESH')
+  })
+
   it('scouts abstain when data is not present and never emit an order or size', () => {
     const event = book(1)
     event.updates = undefined

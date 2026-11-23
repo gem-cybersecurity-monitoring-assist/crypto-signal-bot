@@ -126,7 +126,7 @@ export class FeedHealthRegistry {
     state.lastErrorCode = null
     if (state.recoveryState !== 'healthy') state.recoveryState = 'idle'
     this.refreshState(state, nowMs)
-    return { accepted: true, reason: 'accepted', state: copyState(state) }
+    return { accepted: true, reason: 'accepted', eventId: event.eventId, state: copyState(state) }
   }
 
   markRecoveryHealthy(key: string, lastSequence: number, nowMs: number): FeedHealthState | null {

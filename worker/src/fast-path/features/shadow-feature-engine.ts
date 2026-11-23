@@ -9,6 +9,7 @@ export interface ShadowFeatureSnapshot {
   readonly symbol: string
   readonly source: NormalizedMarketEvent['source']
   readonly eventId: string
+  readonly exchangeTsMs: number
   readonly sourceAgeMs: number
   readonly sampleCount: number
   readonly midPrice: number
@@ -71,7 +72,7 @@ export class ShadowFeatureEngine {
     nowMs: number,
   ): ShadowFeatureSnapshot | null {
     const key = `${event.source}:${event.channel}:${event.symbol}`
-    const healthy = feed.accepted && feed.reason === 'accepted'
+    const healthy = feed.accepted && feed.reason === 'accepted' && feed.eventId === event.eventId
       && feed.state.source === event.source
       && feed.state.channel === event.channel
       && feed.state.symbol === event.symbol
@@ -135,6 +136,7 @@ export class ShadowFeatureEngine {
       symbol: event.symbol,
       source: event.source,
       eventId: event.eventId,
+      exchangeTsMs: event.exchangeTsMs,
       sourceAgeMs: nowMs - event.exchangeTsMs,
       sampleCount: samples,
       midPrice: mid,
