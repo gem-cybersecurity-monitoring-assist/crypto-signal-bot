@@ -1,5 +1,7 @@
 import { BitgetCertificationSecretsStoreProvider, type BitgetCertificationSecretsStoreEnv } from './adapters/bitget/certification-secret-provider.ts'
 import { BitgetReadOnlyClient, type BitgetAccountPermissions } from './adapters/bitget/read-only-client.ts'
+import { BitgetV3ReadOnlyClient } from './adapters/bitget/v3/read-only-client-v3.ts'
+import { runBitgetV3ReadOnlyCertification } from './adapters/bitget/v3/v3-certification.ts'
 import { certifyBitgetReadOnlyContracts } from './bitget-read-only-certification.ts'
 import { canonicalHash } from './canonical-json.ts'
 import { constantTimeHexEqual, sha256Hex } from './operator-read-auth.ts'
@@ -21,7 +23,7 @@ const locks = Object.freeze({ certifiedForLive: false, providerMutationAllowed: 
   executionAllowed: false, withdrawalAllowed: false, transferAllowed: false,
   automaticRetryAllowed: false, credentialsPersisted: false,
   accountModel: 'UNVERIFIED', contract: 'BITGET_CLASSIC_SPOT_V2' })
-const reply = (payload: Record<string, unknown>, status: number) => Response.json({ ...payload, ...locks }, {
+const reply = (payload: Record<string, unknown>, status: number, contract = 'BITGET_CLASSIC_SPOT_V2') => Response.json({ ...payload, ...locks, contract }, {
   status, headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },
 })
 class ServiceError extends Error {
@@ -87,7 +89,11 @@ export async function routePrivateBitgetCertification(
   request: Request, env: PrivateCertificationEnv, dependencies: PrivateCertificationDependencies,
 ): Promise<Response> {
   const path = new URL(request.url).pathname
-  if (!['/internal/bitget/inspect','/internal/bitget/certify'].includes(path)) return reply({ code: 'CERTIFICATION_ROUTE_NOT_FOUND' },404)
+  const uta = path.startsWith('/internal/bitget/uta/')
+  if (!['/internal/bitget/inspect','/internal/bitget/certify',
+    '/internal/bitget/uta/inspect','/internal/bitget/uta/certify'].includes(path)) {
+    return reply({ code: 'CERTIFICATION_ROUTE_NOT_FOUND' },404)
+  }
   if (request.method !== 'POST') return reply({ code: 'CERTIFICATION_METHOD_NOT_ALLOWED' },405)
   const token = env.CERTIFICATION_RUNNER_TOKEN
   if (typeof token !== 'string' || token.length < 32 || token.length > 256) return reply({ code: 'CERTIFICATION_AUTH_NOT_CONFIGURED' },503)
@@ -112,6 +118,40 @@ export async function routePrivateBitgetCertification(
       .every(binding => binding && typeof binding.get === 'function')) fail('CERTIFICATION_SECRETS_UNAVAILABLE')
     const provider = new BitgetCertificationSecretsStoreProvider(env)
     const material = await bounded(provider.read(),secretMs,'CERTIFICATION_SECRETS_TIMEOUT')
+    if (uta) {
+      const v3 = new BitgetV3ReadOnlyClient({ secretProvider: { read: async () => material },
+        fetcher: dependencies.fetcher, now: clock, timeoutMs: providerMs, maxResponseBytes: 131072 })
+      const permissions = await v3.verifyReadOnlyPermissions()
+      const accountRefHash = await canonicalHash(permissions.userId)
+      if (!command) return reply({ code: 'CERTIFICATION_IDENTITY_INSPECTED', accountRefHash,
+        permissionsVerified: permissions.permissionsVerified, accountModelVerified: true,
+        authorityCount: permissions.authorities.length,
+        authoritiesHash: await canonicalHash(permissions.authorities) }, 200, 'BITGET_UTA_V3')
+      if (accountRefHash !== command.expectedAccountRefHash) {
+        return reply({ code: 'CERTIFICATION_ACCOUNT_MISMATCH' }, 403, 'BITGET_UTA_V3')
+      }
+      const now = clock()
+      const result = await runBitgetV3ReadOnlyCertification({
+        runId: command.runId, exchangeAccountId: command.exchangeAccountId,
+        observedAt: new Date(now).toISOString(),
+        productExpiresAt: new Date(now + 120000).toISOString(),
+        evaluatedAt: new Date(now).toISOString(), client: v3,
+      })
+      const completed = clock()
+      if (completed < started || completed - started > 65000) fail('CERTIFICATION_RUN_STALE')
+      // Never serialize account balances, positions, UID, provider raw errors or secrets.
+      return reply({ code: 'CERTIFICATION_CONTRACTS_EVALUATED', accountRefHash,
+        accountModelVerified: true, runDurationMs: completed - started,
+        result: {
+          runId: result.runId, status: result.status, apiVersion: result.apiVersion,
+          checks: result.checks.map(c => ({ name: c.name, status: c.status,
+            evidenceHash: c.evidenceHash, latencyMs: c.latencyMs })),
+          evidenceHash: result.evidenceHash, positionCount: result.positionCount,
+          productCount: result.productCount, certifiedForLive: false,
+          providerMutationAllowed: false, executionAllowed: false,
+          withdrawalAllowed: false, credentialsPersisted: false,
+        } }, 200, 'BITGET_UTA_V3')
+    }
     const client = new BitgetReadOnlyClient({ secretProvider: { read: async () => material },
       fetcher: dependencies.fetcher, now: clock, timeoutMs: providerMs, maxResponseBytes: 131072 })
     const permissions = await client.verifyReadOnlyPermissions()
