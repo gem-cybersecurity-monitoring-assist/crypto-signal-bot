@@ -17,6 +17,7 @@ on:
       - 'wrangler.provider-certification.toml'
       - 'scripts/verify-cloudflare-token-scope*.mjs'
       - '.github/workflows/worker-signal-contract.yml'
+      - '.github/workflows/deploy.yml'
   push:
     branches: [main]
     paths:
@@ -34,6 +35,7 @@ on:
       - 'wrangler.provider-certification.toml'
       - 'scripts/verify-cloudflare-token-scope*.mjs'
       - '.github/workflows/worker-signal-contract.yml'
+      - '.github/workflows/deploy.yml'
 
 permissions:
   contents: read
