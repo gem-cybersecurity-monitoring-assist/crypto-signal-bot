@@ -10,6 +10,7 @@ export function eventFixture(overrides: Partial<NormalizedMarketEvent> = {}): No
     kind: 'level2',
     symbol: 'BTC-USD',
     exchangeTsMs: 1_000,
+    exchangeTimestampSource: 'exchange',
     receivedTsMs: 1_010,
     sequenceStart: sequence,
     sequenceEnd: sequence,

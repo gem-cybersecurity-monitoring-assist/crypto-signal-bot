@@ -23,6 +23,7 @@ export interface NormalizedMarketEvent {
   kind: MarketEventKind
   symbol: string
   exchangeTsMs: number
+  exchangeTimestampSource: 'exchange' | 'receipt'
   receivedTsMs: number
   sequenceStart?: number
   sequenceEnd?: number
@@ -78,11 +79,11 @@ export interface FeedHealthState {
   ephemeral: true
 }
 
-export interface FeedUpdateResult {
-  accepted: boolean
-  reason: 'accepted' | 'heartbeat' | 'duplicate' | 'out_of_order' | 'sequence_gap' | 'invalid'
-  state: FeedHealthState
-}
+export type FeedUpdateResult = { state: FeedHealthState } & (
+  | { accepted: true; reason: 'accepted'; eventId: string }
+  | { accepted: true; reason: 'heartbeat' }
+  | { accepted: false; reason: 'duplicate' | 'out_of_order' | 'sequence_gap' | 'invalid' }
+)
 
 export interface MarketAuthorizationInput {
   action: MarketAction
