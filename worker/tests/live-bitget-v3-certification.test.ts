@@ -149,6 +149,7 @@ function baseInput(overrides: Partial<Record<string, unknown>> = {}) {
   return {
     runId: 'v3-cert-mock-001',
     exchangeAccountId: 'BITGET:UTA:6682030769',
+    productId: 'BTC-USDT',
     observedAt: '2026-10-05T10:30:00.000Z',
     productExpiresAt: '2026-10-06T10:30:00.000Z',
     evaluatedAt: '2026-10-05T10:35:00.000Z',
@@ -223,4 +224,142 @@ test('V3 certification requires runId and exchangeAccountId', async () => {
     runBitgetV3ReadOnlyCertification({ ...baseInput(), runId: '  ' }),
     /runId is required/,
   )
+})
+
+test('invalid UTA API permissions prevent every account-data call, including concurrent reads', async () => {
+  const called: string[] = []
+  const healthy = mockClient()
+  const client: BitgetV3ReadOnlyCertificationClient = {
+    ...healthy,
+    async verifyReadOnlyPermissions() {
+      called.push('verify')
+      await Promise.resolve()
+      throw new Error('invalid or write-enabled API key')
+    },
+    async getAccountAssets() { called.push('assets'); return ASSETS_FIXTURE },
+    async getCurrentPositions() { called.push('positions'); return POSITIONS_FIXTURE },
+    async getInstruments() { called.push('instruments'); return INSTRUMENTS_FIXTURE },
+    async getOrderHistory() { called.push('history'); return ORDER_HISTORY_FIXTURE },
+  }
+  const result = await runBitgetV3ReadOnlyCertification({ ...baseInput(), client })
+  assert.deepEqual(called, ['verify'])
+  assert.equal(result.status, 'FAILED')
+  assert.equal(result.checks[0].status, 'FAIL')
+  assert.deepEqual(result.checks.slice(1).map((check) => check.status), Array(5).fill('BLOCKED'))
+  assert.ok(result.checks.slice(1).every((check) =>
+    check.reason === 'READ_ONLY_PERMISSIONS_NOT_VERIFIED'
+      && check.latencyMs === 0
+      && /^[a-f0-9]{64}$/.test(check.evidenceHash),
+  ))
+  assert.equal(result.unifiedAccountSnapshot, null)
+  assert.equal(result.positionCount, 0)
+  assert.equal(result.productCount, 0)
+  assert.equal(result.certifiedForLive, false)
+  assert.equal(result.executionAllowed, false)
+})
+
+test('fabricated client permissions fail closed before any balance or order-history read', async () => {
+  for (const bad of [
+    { userId: '', readOnly: true, permissionsVerified: true, accountMode: 'hybrid', authorities: ['uta_trade'] },
+    { userId: 'some-id', readOnly: false, permissionsVerified: true, accountMode: 'hybrid', authorities: ['uta_trade'] },
+    { userId: 'some-id', readOnly: true, permissionsVerified: true, accountMode: 'hybrid', authorities: ['uta_trade', 'withdraw'] },
+    { userId: 'some-id', readOnly: true, permissionsVerified: false, accountMode: 'unified', authorities: ['uta_trade'] },
+    { userId: 'some-id', readOnly: true, permissionsVerified: true, accountMode: 'hybrid', authorities: [] },
+  ]) {
+    let reads = 0
+    const client: BitgetV3ReadOnlyCertificationClient = {
+      ...mockClient(),
+      async verifyReadOnlyPermissions() { return bad as never },
+      async getAccountAssets() { reads++; return ASSETS_FIXTURE },
+      async getCurrentPositions() { reads++; return POSITIONS_FIXTURE },
+      async getInstruments() { reads++; return INSTRUMENTS_FIXTURE },
+      async getOrderHistory() { reads++; return ORDER_HISTORY_FIXTURE },
+    }
+    const result = await runBitgetV3ReadOnlyCertification({ ...baseInput(), client })
+    assert.equal(reads, 0)
+    assert.equal(result.status, 'FAILED')
+    assert.equal(result.checks.filter(c => c.status === 'BLOCKED').length, 5)
+  }
+})
+
+test('valid permission verification precedes all UTA account reads', async () => {
+  const called: string[] = []
+  const client: BitgetV3ReadOnlyCertificationClient = {
+    ...mockClient(),
+    async verifyReadOnlyPermissions() {
+      called.push('verify')
+      await Promise.resolve()
+      return assertBitgetV3ReadOnlyAuthorities(SETTINGS_FIXTURE, INFO_FIXTURE)
+    },
+    async getAccountAssets() { called.push('assets'); return ASSETS_FIXTURE },
+    async getCurrentPositions() { called.push('positions'); return POSITIONS_FIXTURE },
+    async getInstruments() { called.push('instruments'); return INSTRUMENTS_FIXTURE },
+    async getOrderHistory() { called.push('history'); return ORDER_HISTORY_FIXTURE },
+  }
+  const result = await runBitgetV3ReadOnlyCertification({ ...baseInput(), client })
+  assert.equal(result.status, 'PASSED')
+  assert.equal(called[0], 'verify')
+  assert.deepEqual(new Set(called.slice(1)), new Set(['assets','positions','instruments','history']))
+})
+
+test('UTA certification requires the requested active Spot product and scopes order history to it', async () => {
+  const observed: string[] = []
+  const client: BitgetV3ReadOnlyCertificationClient = {
+    ...mockClient(),
+    async getInstruments(category, symbol) {
+      observed.push(`instruments:${category}:${String(symbol)}`)
+      return INSTRUMENTS_FIXTURE
+    },
+    async getOrderHistory(symbol) {
+      observed.push(`history:${String(symbol)}`)
+      return ORDER_HISTORY_FIXTURE
+    },
+  }
+  const result = await runBitgetV3ReadOnlyCertification({ ...baseInput(), client })
+  assert.equal(result.status, 'PASSED')
+  assert.deepEqual(new Set(observed), new Set(['instruments:SPOT:BTCUSDT', 'history:BTCUSDT']))
+})
+
+test('UTA certification refuses wrong, missing, inactive, or non-Spot instruments', async () => {
+  for (const instrument of [
+    null,
+    { ...INSTRUMENTS_FIXTURE.data[0], symbol: 'ETHUSDT', baseCoin: 'ETH' },
+    { ...INSTRUMENTS_FIXTURE.data[0], status: 'offline' },
+    { ...INSTRUMENTS_FIXTURE.data[0], category: 'MARGIN' },
+  ]) {
+    const data = instrument ? [instrument] : []
+    const result = await runBitgetV3ReadOnlyCertification(baseInput({
+      instruments: { code: '00000', data },
+    }))
+    assert.equal(result.status, 'FAILED')
+    assert.equal(result.checks.find(c => c.name === 'INSTRUMENTS_CONTRACT')?.status, 'FAIL')
+    assert.equal(result.certifiedForLive, false)
+  }
+})
+
+test('UTA certification refuses cross-symbol order-history rows but allows an empty valid list', async () => {
+  const wrong = await runBitgetV3ReadOnlyCertification(baseInput({
+    orderHistory: { code: '00000', data: { list: [{ orderId: 'test-order-2', category: 'SPOT', symbol: 'ETHUSDT' }] } },
+  }))
+  assert.equal(wrong.status, 'FAILED')
+  assert.equal(wrong.checks.find(c => c.name === 'ORDER_HISTORY_CONTRACT')?.status, 'FAIL')
+  const empty = await runBitgetV3ReadOnlyCertification(baseInput({
+    orderHistory: { code: '00000', data: { list: [] } },
+  }))
+  assert.equal(empty.status, 'PASSED')
+})
+
+test('UTA certification rejects an invalid or self-paired product before provider reads', async () => {
+  let reads = 0
+  const client: BitgetV3ReadOnlyCertificationClient = {
+    ...mockClient(),
+    async verifyReadOnlyPermissions() { reads++; return assertBitgetV3ReadOnlyAuthorities(SETTINGS_FIXTURE, INFO_FIXTURE) },
+  }
+  for (const productId of [' ', 'BTCBTC', 'BTC-BTC', 'btc-usdt', 'BTC-USD-T']) {
+    await assert.rejects(
+      runBitgetV3ReadOnlyCertification({ ...baseInput(), client, productId }),
+      /productId/,
+    )
+  }
+  assert.equal(reads, 0)
 })

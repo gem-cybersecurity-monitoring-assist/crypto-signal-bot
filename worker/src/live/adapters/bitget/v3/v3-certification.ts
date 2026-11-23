@@ -35,8 +35,8 @@ export interface BitgetV3ReadOnlyCertificationClient {
   getCurrentPositions(
     query?: Readonly<Record<string, unknown>>,
   ): Promise<unknown>
-  getInstruments(category: unknown): Promise<unknown>
-  getOrderHistory(): Promise<unknown>
+  getInstruments(category: unknown, symbol?: unknown): Promise<unknown>
+  getOrderHistory(symbol?: unknown): Promise<unknown>
   request(
     endpoint: BitgetV3ReadOnlyEndpoint,
     query?: Readonly<Record<string, string | number | boolean | null | undefined>>,
@@ -46,6 +46,7 @@ export interface BitgetV3ReadOnlyCertificationClient {
 export interface BitgetV3ReadOnlyCertificationInput {
   runId: string
   exchangeAccountId: string
+  productId: string
   observedAt: string
   productExpiresAt: string
   evaluatedAt: string
@@ -125,6 +126,13 @@ export async function runBitgetV3ReadOnlyCertification(
 ): Promise<BitgetV3ReadOnlyCertificationResult> {
   const runId = requiredText(input.runId, 'runId')
   const exchangeAccountId = requiredText(input.exchangeAccountId, 'exchangeAccountId')
+  const productId = requiredText(input.productId, 'productId')
+  if (!/^[A-Z0-9]{2,20}-[A-Z0-9]{2,20}$/.test(productId)) {
+    throw new TypeError('Bitget UTA productId must be BASE-QUOTE uppercase')
+  }
+  const [baseAsset, quoteAsset] = productId.split('-')
+  if (baseAsset === quoteAsset) throw new TypeError('Bitget UTA productId must contain different assets')
+  const symbol = `${baseAsset}${quoteAsset}`
   const adapter = input.adapter ?? new BitgetV3ReadOnlyAdapter()
   let unifiedAccountSnapshot: BitgetV3UnifiedAccountSnapshot | null = null
   let positionCount = 0
@@ -132,17 +140,27 @@ export async function runBitgetV3ReadOnlyCertification(
   let positions: readonly BitgetV3PositionSnapshot[] = Object.freeze([])
   let products: readonly ExchangeProduct[] = Object.freeze([])
 
-  const checks = await Promise.all([
-    timed('READ_ONLY_PERMISSIONS', async () => {
+  // The permission check must settle before any account-data call is scheduled.
+  // Promise.all on all six checks would leak read attempts even for invalid keys.
+  const permissionCheck = await timed('READ_ONLY_PERMISSIONS', async () => {
       const permissions = await input.client.verifyReadOnlyPermissions()
-      if (!permissions.readOnly || !['hybrid','unified'].includes(permissions.accountMode) || !permissions.permissionsVerified) {
+      if (permissions.readOnly !== true
+        || !['hybrid', 'unified'].includes(permissions.accountMode)
+        || permissions.permissionsVerified !== true
+        || typeof permissions.userId !== 'string' || !permissions.userId.trim()
+        || !Array.isArray(permissions.authorities)
+        || !permissions.authorities.includes('uta_trade')
+        || !permissions.authorities.every(scope => scope === 'uta_trade' || scope === 'uta_mgt')) {
         throw new Error('V3 API key and UTA account family have not been verified')
       }
       return {
         reason: null,
         evidence: { userId: permissions.userId, accountMode: permissions.accountMode },
       }
-    }),
+  })
+
+  const downstreamChecks: readonly BitgetV3ReadOnlyCertificationCheck[] =
+    permissionCheck.status === 'PASS' ? await Promise.all([
     timed('ACCOUNT_ASSETS_CONTRACT', async () => {
       const raw = await input.client.getAccountAssets()
       unifiedAccountSnapshot = adapter.normalizeUnifiedAccount(raw, input.observedAt)
@@ -167,14 +185,24 @@ export async function runBitgetV3ReadOnlyCertification(
       }
     }),
     timed('INSTRUMENTS_CONTRACT', async () => {
-      const raw = await input.client.getInstruments('SPOT')
-      const root = raw as Record<string, unknown>
-      const rows = Array.isArray(root.data) ? (root.data as readonly unknown[]) : []
+      const raw = await input.client.getInstruments('SPOT', symbol)
+      const root = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {}
+      const rows = root.data
+      if (root.code !== '00000' || !Array.isArray(rows) || rows.length !== 1) {
+        throw new Error('Bitget UTA requested Spot product instrument is missing or ambiguous')
+      }
+      if (!rows[0] || typeof rows[0] !== 'object' || (rows[0] as Record<string, unknown>).category !== 'SPOT') {
+        throw new Error('Bitget UTA requested instrument is not a Spot instrument')
+      }
       products = Object.freeze(
         rows.map((row) =>
           adapter.normalizeProduct(row, input.observedAt, input.productExpiresAt),
         ),
       )
+      if (products[0].productId !== productId || products[0].tradingEnabled !== true) {
+        products = Object.freeze([])
+        throw new Error('Bitget UTA requested Spot product is unavailable or non-trading')
+      }
       productCount = products.length
       return {
         reason: null,
@@ -185,7 +213,7 @@ export async function runBitgetV3ReadOnlyCertification(
       }
     }),
     timed('ORDER_HISTORY_CONTRACT', async () => {
-      const raw = await input.client.getOrderHistory()
+      const raw = await input.client.getOrderHistory(symbol)
       const root = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {}
       const data = root.data && typeof root.data === 'object' ? root.data as Record<string, unknown> : {}
       const rows = data.list
@@ -194,8 +222,9 @@ export async function runBitgetV3ReadOnlyCertification(
       }
       for (const row of rows) {
         const order = row && typeof row === 'object' ? row as Record<string, unknown> : {}
-        if (order.category !== 'SPOT' || typeof order.orderId !== 'string' || !order.orderId) {
-          throw new Error('Bitget V3 order-history record is not a valid SPOT order')
+        if (order.category !== 'SPOT' || typeof order.orderId !== 'string' || !order.orderId
+          || order.symbol !== symbol) {
+          throw new Error('Bitget V3 order-history contains an unscoped or invalid SPOT record')
         }
       }
       return { reason: null, evidence: { spotOrderHistoryCount: rows.length } }
@@ -220,7 +249,17 @@ export async function runBitgetV3ReadOnlyCertification(
       if (rejected !== 3) throw new Error('read-only enforcement rejected fewer than expected')
       return { reason: null, evidence: { rejected } }
     }),
-  ])
+  ]) : await Promise.all(([
+    'ACCOUNT_ASSETS_CONTRACT', 'POSITION_CONTRACT', 'INSTRUMENTS_CONTRACT',
+    'ORDER_HISTORY_CONTRACT', 'READ_ONLY_ENFORCEMENT',
+  ] as const).map(async (name): Promise<BitgetV3ReadOnlyCertificationCheck> => ({
+    name,
+    status: 'BLOCKED',
+    reason: 'READ_ONLY_PERMISSIONS_NOT_VERIFIED',
+    latencyMs: 0,
+    evidenceHash: await canonicalHash({ name, blockedBy: 'READ_ONLY_PERMISSIONS' }),
+  })))
+  const checks = [permissionCheck, ...downstreamChecks]
 
   const failed = checks.filter((check) => check.status === 'FAIL')
   const blocked = checks.filter((check) => check.status === 'BLOCKED')

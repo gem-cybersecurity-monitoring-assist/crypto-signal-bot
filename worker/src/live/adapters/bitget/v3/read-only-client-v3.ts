@@ -335,8 +335,11 @@ export class BitgetV3ReadOnlyClient {
     return assertBitgetV3ReadOnlyAuthorities(settings, info)
   }
 
-  getOrderHistory(): Promise<unknown> {
-    return this.request(BITGET_V3_ENDPOINTS.orderHistory, { category: 'SPOT', limit: 10 })
+  getOrderHistory(symbol?: unknown): Promise<unknown> {
+    return this.request(BITGET_V3_ENDPOINTS.orderHistory, {
+      category: 'SPOT', limit: 10,
+      ...(symbol === undefined ? {} : { symbol: normalizeBitgetV3Symbol(symbol) }),
+    })
   }
 
   getAccountAssets(): Promise<unknown> {
@@ -385,9 +388,10 @@ export class BitgetV3ReadOnlyClient {
     return this.request(BITGET_V3_ENDPOINTS.currentPositions, normalized)
   }
 
-  async getInstruments(category: unknown): Promise<unknown> {
+  async getInstruments(category: unknown, symbol?: unknown): Promise<unknown> {
     return this.request(BITGET_V3_ENDPOINTS.instruments, {
       category: assertBitgetV3Category(category),
+      ...(symbol === undefined ? {} : { symbol: normalizeBitgetV3Symbol(symbol) }),
     })
   }
 }

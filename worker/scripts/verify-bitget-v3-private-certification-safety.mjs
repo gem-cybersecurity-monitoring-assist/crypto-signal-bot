@@ -6,6 +6,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const read = (relative) => fs.readFileSync(path.join(root, relative), 'utf8')
 const endpoints = read('worker/src/live/adapters/bitget/v3/endpoints-v3.ts')
 const client = read('worker/src/live/adapters/bitget/v3/read-only-client-v3.ts')
+const harness = read('worker/src/live/adapters/bitget/v3/v3-certification.ts')
 const service = read('worker/src/live/bitget-private-certification-service.ts')
 const config = read('wrangler.provider-certification.toml')
 const paper = read('worker/src/index.ts')
@@ -23,6 +24,14 @@ for (const [source, needle, message] of [
   [client, "this.request(BITGET_V3_ENDPOINTS.accountInfo)", 'separate key-permission request missing'],
   [client, "this.request(BITGET_V3_ENDPOINTS.accountSettings)", 'separate account-mode request missing'],
   [client, "BITGET_V3_ENDPOINTS.orderHistory", 'UTA order-history GET missing'],
+  [harness, "const permissionCheck = await timed('READ_ONLY_PERMISSIONS'", 'UTA permission check must settle before account reads'],
+  [harness, "permissionCheck.status === 'PASS' ? await Promise.all([", 'UTA account reads must be permission-gated'],
+  [harness, "getInstruments('SPOT', symbol)", 'UTA instrument review must be symbol-scoped'],
+  [harness, "getOrderHistory(symbol)", 'UTA order-history review must be symbol-scoped'],
+  [harness, "products[0].productId !== productId", 'UTA requested product must be validated'],
+  [service, 'productId: command.productId', 'private service must bind requested product to certification'],
+  [client, "symbol: normalizeBitgetV3Symbol(symbol)", 'UTA read-only query must validate its symbol'],
+  [harness, "reason: 'READ_ONLY_PERMISSIONS_NOT_VERIFIED'", 'invalid UTA permissions must block downstream checks'],
   [service, "/internal/bitget/uta/inspect", 'private UTA inspection route missing'],
   [service, "/internal/bitget/uta/certify", 'private UTA certification route missing'],
   [service, 'const permissions = await v3.verifyReadOnlyPermissions()', 'UTA permissions not reloaded before collecting account data'],
@@ -32,6 +41,12 @@ for (const [source, needle, message] of [
   [service, "executionAllowed: false", 'UTA certification must never grant execution'],
   [service, "withdrawalAllowed: false", 'UTA certification must never grant withdrawals'],
 ]) requireText(source, needle, message)
+
+const permissionCheckAt = harness.indexOf("const permissionCheck = await timed('READ_ONLY_PERMISSIONS'")
+const accountReadAt = harness.indexOf("timed('ACCOUNT_ASSETS_CONTRACT'")
+if (permissionCheckAt < 0 || accountReadAt <= permissionCheckAt) {
+  errors.push('account-data certification checks must follow permission verification')
+}
 
 for (const file of [
   'worker/src/index.ts',

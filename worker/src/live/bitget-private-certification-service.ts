@@ -139,6 +139,7 @@ export async function routePrivateBitgetCertification(
       const now = clock()
       const result = await runBitgetV3ReadOnlyCertification({
         runId: command.runId, exchangeAccountId: command.exchangeAccountId,
+        productId: command.productId,
         observedAt: new Date(now).toISOString(),
         productExpiresAt: new Date(now + 120000).toISOString(),
         evaluatedAt: new Date(now).toISOString(), client: v3,
