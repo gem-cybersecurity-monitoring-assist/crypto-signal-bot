@@ -37,8 +37,8 @@ const SIGNING_MATERIAL: BitgetDemoSigningMaterial = Object.freeze({
 })
 const SIGNED_BODY_FIXTURES = Object.freeze({
   place: Object.freeze({
-    body: '{"clientOid":"demo-place-0001","force":"gtc","orderType":"market","side":"buy","size":"100","symbol":"BTCUSDT"}',
-    signature: 'p7l1AYheofyaNaZklxeI7n3kZpxlWX4dmD/H/Pvsu+k=',
+    body: '{"clientOid":"demo-place-0001","orderType":"market","side":"buy","size":"100","symbol":"BTCUSDT"}',
+    signature: 'y2lIlEApY0NBpeQBP63b5el2wt8UJGFiYYdAP54xyPc=',
   }),
   cancel: Object.freeze({
     body: '{"clientOid":"demo-place-0001","symbol":"BTCUSDT"}',
