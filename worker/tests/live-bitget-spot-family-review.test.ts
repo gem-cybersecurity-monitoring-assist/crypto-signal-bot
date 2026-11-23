@@ -106,3 +106,21 @@ test('fabricated v3 endpoint or unsafe candidate method never becomes authorized
   assert.equal(unsafeMethod.status, 'BLOCKED')
   assert.equal(unsafeMethod.providerMutationAllowed, false)
 })
+
+test('expired and future-created candidate windows fail closed despite intact candidate hashes', async () => {
+  const data = await input()
+  const windows = [
+    ['2026-11-23T09:50:00.000Z', '2026-11-23T09:59:59.000Z'],
+    ['2026-11-23T10:00:01.000Z', '2026-11-23T10:01:00.000Z'],
+  ]
+  for (const [builtAt, expiresAt] of windows) {
+    const candidate = await buildBitgetCancelOrderCandidate({
+      productId: 'BTC-USDT', identity: { orderId: null, clientOrderId: 'review-cancel-1' },
+      builtAt, expiresAt,
+    })
+    const result = await assessBitgetSpotFamily({ ...data, candidate })
+    assert.equal(result.status, 'BLOCKED')
+    assert.ok(result.reasonCodes.includes('CANDIDATE_VALIDITY_WINDOW_INACTIVE'))
+    assert.equal(result.approvedEndpoint, null)
+  }
+})
