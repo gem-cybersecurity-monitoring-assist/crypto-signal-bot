@@ -35,6 +35,8 @@ for (const [source, needle, message] of [
   [service, "/internal/bitget/uta/inspect", 'private UTA inspection route missing'],
   [service, "/internal/bitget/uta/certify", 'private UTA certification route missing'],
   [service, 'const permissions = await v3.verifyReadOnlyPermissions()', 'UTA permissions not reloaded before collecting account data'],
+  [service, 'requireFreshResponseTime: true', 'UTA private service must reject replayed provider responses'],
+  [client, "'PROVIDER_RESPONSE_NOT_FRESH'", 'UTA response timestamp validation must be enabled'],
   [service, 'accountRefHash !== command.expectedAccountRefHash', 'identity mismatch guard missing'],
   [service, "contract = 'BITGET_CLASSIC_SPOT_V2'", 'Classic route compatibility missing'],
   [service, "'BITGET_UTA_V3'", 'UTA version marker missing'],

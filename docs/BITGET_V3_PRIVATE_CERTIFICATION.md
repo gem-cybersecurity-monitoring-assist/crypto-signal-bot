@@ -105,7 +105,15 @@ provider response was obtained.
   service binding; retain redacted, hashed evidence in a reviewed location.
 - Confirm which account/API family the actual owner account uses. Classic v2
   and UTA v3 must not auto-failover or share order credentials.
-- A successful v2/v3 read-only check does **not** authorize real-money
+- The private UTA service also requires a fresh numeric Bitget `requestTime`
+  on every HTTP 200/API-code-success response (signed private and public
+  market instruments). The timestamp must be a safe integer in milliseconds,
+  at most 120 seconds old and no more than 30 seconds ahead of the trusted
+  server clock. Missing, stale, replayed, malformed or future-dated envelopes
+  fail closed, without exposing raw provider responses. The option is enabled
+  only by the private certification service; older local test fixtures remain
+  backward-compatible unless they explicitly enable strict freshness.
+  A successful v2/v3 read-only check does **not** authorize real-money
   execution. The independent live-order, cancellation, reconciliation,
   rollback and risk-control release has not been established here.
 
