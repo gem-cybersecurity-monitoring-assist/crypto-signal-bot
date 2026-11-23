@@ -19,22 +19,48 @@ const checks = [
 
 let failed = false;
 
-for (const [method, path, expectedStatus, validateBody] of checks) {
-  const response = await fetch(new URL(path, baseUrl), { method, redirect: "error", signal: AbortSignal.timeout(12_000) });
-  const text = await response.text();
-  let body;
-  try {
-    body = JSON.parse(text);
-  } catch {
-    body = undefined;
-  }
+const MAX_SMOKE_RESPONSE_BYTES = 64 * 1024;
 
-  const expectedStatuses = Array.isArray(expectedStatus) ? expectedStatus : [expectedStatus];
-  const ok = expectedStatuses.includes(response.status) && body !== undefined && validateBody(body);
-  console.log(`${ok ? "PASS" : "FAIL"} ${method} ${path} -> ${response.status}`);
-  if (!ok) {
+for (const [method, path, expectedStatus, validateBody] of checks) {
+  try {
+    const response = await fetch(new URL(path, baseUrl), { method, redirect: "error", signal: AbortSignal.timeout(12_000) });
+    const declaredLength = response.headers?.get("content-length");
+    if (declaredLength !== null && declaredLength !== undefined &&
+        (!/^\d+$/.test(declaredLength) || Number(declaredLength) > MAX_SMOKE_RESPONSE_BYTES)) {
+      throw new Error("smoke response length invalid");
+    }
+    // Bound actual bytes, even when Content-Length is absent or dishonest.
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error("smoke response stream unavailable");
+    const chunks = [];
+    let size = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > MAX_SMOKE_RESPONSE_BYTES) throw new Error("smoke response exceeds limit");
+        chunks.push(value);
+      }
+    } finally {
+      await reader.cancel().catch(() => {});
+    }
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+    let body;
+    try { body = JSON.parse(new TextDecoder().decode(bytes)); } catch { body = undefined; }
+    const expectedStatuses = Array.isArray(expectedStatus) ? expectedStatus : [expectedStatus];
+    const ok = expectedStatuses.includes(response.status) && body !== undefined && validateBody(body);
+    console.log(`${ok ? "PASS" : "FAIL"} ${method} ${path} -> ${response.status}`);
+    if (!ok) {
+      failed = true;
+      console.error(`Smoke response rejected for ${method} ${path}; body withheld from logs`);
+    }
+  } catch {
     failed = true;
-    console.error(`Smoke response rejected for ${method} ${path}; body withheld from logs`);
+    console.log(`FAIL ${method} ${path} -> request or response rejected`);
+    console.error(`Smoke request failed for ${method} ${path}; details withheld from logs`);
   }
 }
 
