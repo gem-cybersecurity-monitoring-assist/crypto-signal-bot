@@ -314,3 +314,41 @@ test('strict response-time verification is opt-in for mock fixtures, not a provi
   const response = await client.getAccountAssets()
   assert.deepEqual(response, { code: '00000', data: {} })
 })
+
+test('V3 order-info recovery signs only exact GET requests; unknown identity never contacts provider', async () => {
+  const observed: Array<{url:string, method:string, key:string | null, signature:string | null}> = []
+  let credentialsRead = 0
+  const client = new BitgetV3ReadOnlyClient({
+    now: () => 1784289600000,
+    secretProvider: {async read() {
+      credentialsRead++
+      return {apiKey:'test-key', secretKey:'test-secret', passphrase:'test-passphrase'}
+    }},
+    fetcher: async (url, init) => {
+      const headers = new Headers(init?.headers)
+      observed.push({url:String(url), method:init?.method??'',
+        key:headers.get('ACCESS-KEY'), signature:headers.get('ACCESS-SIGN')})
+      return jsonResponse({code:'00000', requestTime:1784289600000, data:{
+        orderId:'123456789', clientOid:'candidate-001', category:'SPOT',
+        symbol:'BTCUSDT', side:'buy', orderType:'market', orderStatus:'filled',
+      }})
+    },
+  })
+  const response = await client.getOrderInfo({clientOid:'candidate-001'})
+  assert.ok(response)
+  await client.getOrderInfo({orderId:'123456789'})
+  assert.deepEqual(observed.map(x=>[new URL(x.url).pathname,
+    new URL(x.url).search, x.method]), [
+    ['/api/v3/trade/order-info', '?clientOid=candidate-001', 'GET'],
+    ['/api/v3/trade/order-info', '?orderId=123456789', 'GET'],
+  ])
+  assert.ok(observed.every(x=>x.key==='test-key' && /^[A-Za-z0-9+/]+=*$/.test(x.signature??'')))
+  assert.equal(credentialsRead, 2)
+  for (const identity of [{}, {orderId:'123',clientOid:'abc'},
+    {clientOid:'a'.repeat(33)}, {clientOid:'x%26category=MARGIN'},
+    {orderId:'abc'}, {orderId:'123',method:'POST'}]) {
+    assert.throws(() => client.getOrderInfo(identity))
+  }
+  assert.equal(observed.length, 2)
+  assert.equal(credentialsRead, 2)
+})

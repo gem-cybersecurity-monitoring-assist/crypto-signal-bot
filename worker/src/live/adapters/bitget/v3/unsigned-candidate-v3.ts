@@ -11,7 +11,7 @@ export const BITGET_V3_ORDER_CANDIDATE_ENDPOINTS = Object.freeze({
 } as const)
 
 const HEX64 = /^[a-f0-9]{64}$/
-const CLIENT_ID = /^[A-Za-z0-9:_-]{1,64}$/
+const CLIENT_ID = /^[A-Za-z0-9:_-]{1,32}$/
 const PROVIDER_ID = /^[0-9]{1,64}$/
 const PRODUCT_ID = /^[A-Z0-9]{2,20}-[A-Z0-9]{2,20}$/
 const LOCKS = Object.freeze({
@@ -91,7 +91,7 @@ function requireHex(value: string, field: string): string {
 }
 function requireClientId(value: string): string {
   if (typeof value !== 'string' || !CLIENT_ID.test(value)) {
-    throw new TypeError('clientOrderId must be a 1-64 character provider-safe identifier')
+    throw new TypeError('clientOrderId must be a 1-32 character provider-safe identifier')
   }
   return value
 }

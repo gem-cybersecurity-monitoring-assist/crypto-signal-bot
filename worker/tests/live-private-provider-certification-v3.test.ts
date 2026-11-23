@@ -7,7 +7,7 @@ import { BITGET_V3_ENDPOINTS } from '../src/live/adapters/bitget/v3/endpoints-v3
 const TOKEN = 'internal-uta-certification-token-123456789'
 const AT = Date.parse('2026-11-23T12:50:00.000Z')
 const UID = 'test-uta-identity-123'
-type FixtureOptions = { permType?: string; permissions?: string[]; settingsMode?: string; infoUserId?: string; history?: unknown; apiCode?: string; responseTime?: unknown }
+type FixtureOptions = { permType?: string; permissions?: string[]; settingsMode?: string; infoUserId?: string; history?: unknown; apiCode?: string; responseTime?: unknown; orderInfo?: unknown }
 function fixture(options: FixtureOptions = {}) {
   const reads = { key: 0, secret: 0, passphrase: 0 }
   const paths: string[] = [], methods: string[] = []
@@ -41,13 +41,20 @@ function fixture(options: FixtureOptions = {}) {
           minOrderQty: '0.00001', minOrderAmount: '1' }]
       } else if (path === BITGET_V3_ENDPOINTS.orderHistory) {
         data = options.history ?? { list: [{ orderId: 'fake-history-1', category: 'SPOT', symbol: 'BTCUSDT' }] }
+      } else if (path === BITGET_V3_ENDPOINTS.orderInfo) {
+        data = options.orderInfo ?? {
+          category:'SPOT', symbol:'BTCUSDT',
+          orderId:'1234567890123', clientOid:'candidate-v3-001',
+          side:'buy', orderType:'market', orderStatus:'filled',
+          qty:'0', amount:'100', cumExecQty:'0.002', cumExecValue:'100',
+        }
       } else throw new Error('unexpected request path')
       return Response.json({ code: options.apiCode ?? '00000', requestTime: options.responseTime === undefined ? AT : options.responseTime, data })
     },
   }
   return { env, dependencies, reads, paths, methods }
 }
-function request(route: 'inspect'|'certify', body?: unknown, token = TOKEN) {
+function request(route: 'inspect'|'certify'|'order-info', body?: unknown, token = TOKEN) {
   return new Request('https://private-service/internal/bitget/uta/' + route, {
     method: 'POST',
     headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
@@ -194,4 +201,104 @@ test('private UTA inspection blocks stale or missing response timestamps before 
     assert.equal(redacted.executionAllowed, false)
     assertRedacted(redacted)
   }
+})
+
+test('private UTA recovery returns only hashed read-only order evidence for exact account/product', async () => {
+  const f = fixture()
+  const response = await routePrivateBitgetCertification(
+    request('order-info',{...await command(),orderIdentity:{clientOid:'candidate-v3-001'}}),
+    f.env,f.dependencies)
+  const output=await body(response)
+  assert.equal(response.status,200)
+  assert.equal(output.code,'CERTIFICATION_ORDER_INFO_REVIEWED')
+  assert.equal(output.contract,'BITGET_UTA_V3')
+  assert.equal(output.review.status,'filled')
+  assert.equal(output.review.terminalProviderStatus,true)
+  assert.match(output.review.responseHash,/^[a-f0-9]{64}$/)
+  assert.match(output.review.observedIdentityHash,/^[a-f0-9]{64}$/)
+  assert.equal(output.review.ledgerSettlementConfirmed,false)
+  assert.equal(output.review.automaticRetryAllowed,false)
+  assert.equal(output.review.providerMutationAllowed,false)
+  assert.equal(output.review.liveExecutionAllowed,false)
+  assert.equal(output.review.independentReconciliationRequired,true)
+  assert.equal(output.certifiedForLive,false)
+  assert.equal(output.executionAllowed,false)
+  assert.ok(f.paths.includes(BITGET_V3_ENDPOINTS.orderInfo))
+  assert.deepEqual(f.paths,[
+    BITGET_V3_ENDPOINTS.accountInfo, BITGET_V3_ENDPOINTS.accountSettings,
+    BITGET_V3_ENDPOINTS.orderInfo,
+  ])
+  assert.ok(f.methods.every(method=>method==='GET'))
+  assert.deepEqual(f.reads,{key:1,secret:1,passphrase:1})
+  const json=JSON.stringify(output)
+  for(const leaked of ['1234567890123','candidate-v3-001','TEST_ONLY_KEY','TEST_ONLY_SECRET']) {
+    assert.equal(json.includes(leaked),false)
+  }
+  assertRedacted(output)
+})
+
+test('private UTA recovery rejects account-hash mismatch before order-info query', async () => {
+  const f=fixture()
+  const response=await routePrivateBitgetCertification(
+    request('order-info',{...await command('other-owner'),orderIdentity:{clientOid:'candidate-v3-001'}}),
+    f.env,f.dependencies)
+  assert.equal(response.status,403)
+  assert.equal(f.paths.includes(BITGET_V3_ENDPOINTS.orderInfo),false)
+  assert.deepEqual(f.paths,[BITGET_V3_ENDPOINTS.accountInfo,BITGET_V3_ENDPOINTS.accountSettings])
+})
+
+test('private UTA recovery rejects malformed command before reading credentials', async()=>{
+  for(const identity of [null,{},[],{orderId:'12',clientOid:'candidate-v3-001'},
+    {clientOid:'x'.repeat(33)},{orderId:'abcdef'},{clientOid:'valid',category:'MARGIN'}]) {
+    const f=fixture()
+    const response=await routePrivateBitgetCertification(
+      request('order-info',{...await command(),orderIdentity:identity}),
+      f.env,f.dependencies)
+    assert.equal(response.status,503)
+    assert.equal((await body(response)).code,'CERTIFICATION_COMMAND_INVALID')
+    assert.deepEqual(f.paths,[])
+    assert.deepEqual(f.reads,{key:0,secret:0,passphrase:0})
+  }
+})
+
+test('private UTA recovery refuses mismatched order status, market and identity without leaking response', async()=>{
+  const good={category:'SPOT',symbol:'BTCUSDT',orderId:'1234567890123',
+    clientOid:'candidate-v3-001',side:'buy',orderType:'market',orderStatus:'filled'}
+  for(const override of [
+    {category:'MARGIN'},{symbol:'ETHUSDT'},
+    {clientOid:'another-client'},{orderStatus:'unknown'}, {side:'hold'}
+  ]) {
+    const f=fixture({orderInfo:{...good,...override}})
+    const response=await routePrivateBitgetCertification(
+      request('order-info',{...await command(),orderIdentity:{clientOid:'candidate-v3-001'}}),
+      f.env,f.dependencies)
+    assert.equal(response.status,503)
+    const output=await body(response)
+    assert.equal(output.code,'CERTIFICATION_PROVIDER_UNAVAILABLE')
+    assert.equal(JSON.stringify(output).includes('another-client'),false)
+    assert.equal(output.automaticRetryAllowed,false)
+    assertRedacted(output)
+    assert.ok(f.paths.includes(BITGET_V3_ENDPOINTS.orderInfo))
+  }
+})
+
+test('private UTA recovery declines untrusted invocation token before secrets or network',async()=>{
+  const f=fixture()
+  const response=await routePrivateBitgetCertification(
+    request('order-info',{...await command(),orderIdentity:{clientOid:'candidate-v3-001'}},'invalid-token'),
+    f.env,f.dependencies)
+  assert.equal(response.status,401)
+  assert.deepEqual(f.paths,[])
+  assert.deepEqual(f.reads,{key:0,secret:0,passphrase:0})
+})
+
+test('private UTA recovery by provider orderId refuses mismatched returned orderId',async()=>{
+  const f=fixture({orderInfo:{category:'SPOT',symbol:'BTCUSDT',orderId:'9999999999',
+    clientOid:'candidate-v3-001',side:'buy',orderType:'market',orderStatus:'filled'}})
+  const response=await routePrivateBitgetCertification(
+    request('order-info',{...await command(),orderIdentity:{orderId:'1234567890123'}}),
+    f.env,f.dependencies)
+  assert.equal(response.status,503)
+  assert.equal((await body(response)).code,'CERTIFICATION_PROVIDER_UNAVAILABLE')
+  assert.ok(f.paths.includes(BITGET_V3_ENDPOINTS.orderInfo))
 })

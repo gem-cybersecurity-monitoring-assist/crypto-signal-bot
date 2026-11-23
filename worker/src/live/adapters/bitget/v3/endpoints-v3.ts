@@ -21,6 +21,7 @@ export const BITGET_V3_API_ORIGIN = 'https://api.bitget.com'
 export const BITGET_V3_ENDPOINTS = Object.freeze({
   accountInfo: '/api/v3/account/info',
   orderHistory: '/api/v3/trade/history-orders',
+  orderInfo: '/api/v3/trade/order-info',
   accountAssets: '/api/v3/account/assets',
   accountSettings: '/api/v3/account/settings',
   fundingAssets: '/api/v3/account/funding-assets',
@@ -34,6 +35,7 @@ export type BitgetV3ReadOnlyEndpoint =
 const PRIVATE_V3_READ_PATHS = new Set<BitgetV3ReadOnlyEndpoint>([
   BITGET_V3_ENDPOINTS.accountInfo,
   BITGET_V3_ENDPOINTS.orderHistory,
+  BITGET_V3_ENDPOINTS.orderInfo,
   BITGET_V3_ENDPOINTS.accountAssets,
   BITGET_V3_ENDPOINTS.accountSettings,
   BITGET_V3_ENDPOINTS.fundingAssets,
@@ -70,6 +72,29 @@ export function assertBitgetV3Category(value: unknown): BitgetV3Category {
     )
   }
   return normalized as BitgetV3Category
+}
+
+/** Exactly one provider order identity; never infer or fall back to a different order. */
+export function assertBitgetV3OrderLookupIdentity(
+  input: unknown,
+): Readonly<{ orderId: string } | { clientOid: string }> {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw new TypeError('Bitget V3 recovery requires an order identity object')
+  }
+  const record = input as Record<string, unknown>
+  const keys = Object.keys(record)
+  if (keys.length !== 1) throw new TypeError('Bitget V3 recovery requires exactly one identity')
+  if (keys[0] === 'orderId' && typeof record.orderId === 'string'
+    && /^[0-9]{1,64}$/.test(record.orderId)) {
+    return Object.freeze({ orderId: record.orderId })
+  }
+  // A deliberate, conservative subset of Bitget's documented 1-32 character
+  // clientOid syntax. No whitespace, Unicode, query delimiter or path injection.
+  if (keys[0] === 'clientOid' && typeof record.clientOid === 'string'
+    && /^[A-Za-z0-9:_-]{1,32}$/.test(record.clientOid)) {
+    return Object.freeze({ clientOid: record.clientOid })
+  }
+  throw new TypeError('Bitget V3 recovery order identity is malformed or exceeds provider limits')
 }
 
 export function assertBitgetV3PositionSide(value: unknown): BitgetV3PositionSide {
