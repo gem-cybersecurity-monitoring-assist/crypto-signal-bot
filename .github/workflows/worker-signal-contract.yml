@@ -53,7 +53,7 @@ jobs:
       - name: Type-check Worker
         run: npm --prefix worker run build
       - name: Run Worker contract tests
-        run: npm run test:worker
+        run: npm exec -- vitest run -c worker/vitest.config.ts
       - name: Verify paper-only safety
         run: npm --prefix worker run verify:paper-safety
       - name: Verify Bitget certification without credentials
