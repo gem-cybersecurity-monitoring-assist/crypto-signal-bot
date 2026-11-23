@@ -90,11 +90,11 @@ describe('Phase 3 replay through the feed integrity gate', () => {
         return { feed: feed.reason, decision }
       }
 
-      function update(sequence: number, receivedTsMs: number) {
+      function update(sequence: number, receivedTsMs: number, includeTimestamp = true) {
         const bid = 100 + sequence / 50
         return ingest({
           channel: 'l2_data',
-          timestamp: epoch + sequence * 10 + 1_000,
+          timestamp: includeTimestamp ? epoch + sequence * 10 + 1_000 : undefined,
           sequence_num: sequence,
           events: [{
             type: 'update',
@@ -114,6 +114,7 @@ describe('Phase 3 replay through the feed integrity gate', () => {
         warmup: update(2, 1020),
         eligible: update(3, 1030),
         stale: update(4, 1541),
+        missingTimestamp: update(5, 1551, false),
         gap: update(60, 1601),
         afterGap: update(61, 1611),
       }
@@ -129,6 +130,7 @@ describe('Phase 3 replay through the feed integrity gate', () => {
       executionAllowed: false,
     })
     expect(result.stale).toEqual({ feed: 'accepted', decision: null })
+    expect(result.missingTimestamp).toEqual({ feed: 'accepted', decision: null })
     expect(result.gap).toEqual({ feed: 'sequence_gap', decision: null })
     expect(result.afterGap.decision).toBeNull()
   })

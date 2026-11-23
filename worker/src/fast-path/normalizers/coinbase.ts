@@ -50,7 +50,7 @@ export function normalizeCoinbaseMessage(
   const root = asRecord(payload)
   const channel = String(root.channel ?? root.type ?? 'unknown')
   const rootSequence = sequenceNumber(root.sequence_num ?? root.sequence)
-  const rootExchangeTs = parseTimestampMs(root.timestamp, receivedTsMs)
+  const rootExchangeTs = parseTimestampMs(root.timestamp, Number.NaN)
   const rawEvents = Array.isArray(root.events) && root.events.length > 0 ? root.events : [root]
   const normalized: NormalizedMarketEvent[] = []
 
@@ -60,10 +60,12 @@ export function normalizeCoinbaseMessage(
     const productId = record.product_id ?? record.productId ?? root.product_id ?? '*'
     const symbol = productId === '*' ? '*' : normalizeMarketSymbol(productId)
     const sequence = sequenceNumber(record.sequence_num ?? record.sequence ?? rootSequence)
-    const exchangeTsMs = parseTimestampMs(
+    const providerTsMs = parseTimestampMs(
       record.event_time ?? record.current_time ?? record.timestamp ?? root.timestamp,
       rootExchangeTs,
     )
+    const hasProviderTimestamp = Number.isFinite(providerTsMs)
+    const exchangeTsMs = hasProviderTimestamp ? providerTsMs : receivedTsMs
     const updates = parseUpdates(record.updates)
     const bids = updates.filter((update) => update.side === 'bid' && update.quantity > 0)
     const asks = updates.filter((update) => update.side === 'ask' && update.quantity > 0)
@@ -74,6 +76,7 @@ export function normalizeCoinbaseMessage(
       kind: eventKind(channel, type),
       symbol,
       exchangeTsMs,
+      exchangeTimestampSource: hasProviderTimestamp ? 'exchange' : 'receipt',
       receivedTsMs,
       sequenceStart: sequence,
       sequenceEnd: sequence,

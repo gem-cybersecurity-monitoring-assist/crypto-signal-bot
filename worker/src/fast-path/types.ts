@@ -23,6 +23,7 @@ export interface NormalizedMarketEvent {
   kind: MarketEventKind
   symbol: string
   exchangeTsMs: number
+  exchangeTimestampSource: 'exchange' | 'receipt'
   receivedTsMs: number
   sequenceStart?: number
   sequenceEnd?: number

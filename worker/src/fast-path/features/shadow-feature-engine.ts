@@ -81,6 +81,7 @@ export class ShadowFeatureEngine {
       && feed.state.sequenceState === 'continuous'
       && feed.state.freshnessClass === 'green'
       && priceOrigin === 'live'
+      && event.exchangeTimestampSource === 'exchange'
       && Number.isFinite(nowMs)
       && event.exchangeTsMs > 0
       && event.exchangeTsMs <= nowMs
