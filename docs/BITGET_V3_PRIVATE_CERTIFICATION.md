@@ -41,6 +41,13 @@ The pre-existing private Worker now supports:
   permissions, balances, positions, instruments, Spot order history and
   GET-only enforcement. Returns check statuses and evidence hashes, never
   balances, raw positions, orders, UID, IPs, secret values or request headers.
+- POST `/internal/bitget/uta/order-info` — private, authenticated source-only
+  order recovery evidence. Requires `runId`, account scope/hash, productId
+  and exactly one vetted `orderIdentity`. Validates permission and UID before
+  signed provider `GET /api/v3/trade/order-info`; verifies provider identity,
+  product, status and freshness and returns **only hashed identifiers/status**.
+  `automaticRetryAllowed=false`, `ledgerSettlementConfirmed=false` and
+  `independentReconciliationRequired=true` even if the provider reports FILLED.
 
 The same infrastructure-only bearer token is checked *before* any provider
 secret is read, and the validated internal command requires

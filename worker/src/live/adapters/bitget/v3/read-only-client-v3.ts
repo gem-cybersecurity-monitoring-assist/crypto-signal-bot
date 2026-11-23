@@ -34,6 +34,7 @@ import {
   BITGET_V3_ENDPOINTS,
   assertBitgetV3Category,
   assertBitgetV3PositionSide,
+  assertBitgetV3OrderLookupIdentity,
   assertBitgetV3ReadOnlyRequest,
   buildBitgetV3Query,
   isBitgetV3PrivateReadEndpoint,
@@ -352,6 +353,13 @@ export class BitgetV3ReadOnlyClient {
     const info = await this.request(BITGET_V3_ENDPOINTS.accountInfo)
     const settings = await this.request(BITGET_V3_ENDPOINTS.accountSettings)
     return assertBitgetV3ReadOnlyAuthorities(settings, info)
+  }
+
+  /** Provider-signed GET only. Caller must independently verify account, product,
+   * identity and settlement evidence before interpreting any order response. */
+  getOrderInfo(identity: unknown): Promise<unknown> {
+    return this.request(BITGET_V3_ENDPOINTS.orderInfo,
+      assertBitgetV3OrderLookupIdentity(identity))
   }
 
   getOrderHistory(symbol?: unknown): Promise<unknown> {

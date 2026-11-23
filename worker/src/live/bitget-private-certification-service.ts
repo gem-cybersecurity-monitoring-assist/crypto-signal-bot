@@ -2,6 +2,8 @@ import { BitgetCertificationSecretsStoreProvider, type BitgetCertificationSecret
 import { BitgetReadOnlyClient, type BitgetAccountPermissions } from './adapters/bitget/read-only-client.ts'
 import { BitgetV3ReadOnlyClient } from './adapters/bitget/v3/read-only-client-v3.ts'
 import { runBitgetV3ReadOnlyCertification } from './adapters/bitget/v3/v3-certification.ts'
+import { assertBitgetV3OrderLookupIdentity } from './adapters/bitget/v3/endpoints-v3.ts'
+import { reviewBitgetV3SpotOrderInfo } from './adapters/bitget/v3/order-info-review-v3.ts'
 import { certifyBitgetReadOnlyContracts } from './bitget-read-only-certification.ts'
 import { canonicalHash } from './canonical-json.ts'
 import { constantTimeHexEqual, sha256Hex } from './operator-read-auth.ts'
@@ -49,7 +51,13 @@ async function bounded<T>(operation: Promise<T>, ms: number, code: string, onTim
     })])
   } finally { if (timer !== undefined) clearTimeout(timer) }
 }
-async function readCommand(request: Request, timeoutMs: number): Promise<Record<string, string>> {
+async function readCommand(request: Request, timeoutMs: number, orderInfo = false): Promise<{
+  runId: string
+  exchangeAccountId: string
+  expectedAccountRefHash: string
+  productId: string
+  orderIdentity?: Readonly<{orderId:string}|{clientOid:string}>
+}> {
   if (!request.headers.get('Content-Type')?.toLowerCase().startsWith('application/json')) fail('CERTIFICATION_COMMAND_INVALID')
   const reader = request.body?.getReader()
   if (!reader) fail('CERTIFICATION_COMMAND_INVALID')
@@ -73,14 +81,22 @@ async function readCommand(request: Request, timeoutMs: number): Promise<Record<
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) fail('CERTIFICATION_COMMAND_INVALID')
     const command = parsed as Record<string, unknown>
     const keys = ['runId','exchangeAccountId','expectedAccountRefHash','productId']
-    if (Object.keys(command).length !== keys.length || keys.some(k => typeof command[k] !== 'string')
+    if (orderInfo) keys.push('orderIdentity')
+    if (Object.keys(command).length !== keys.length || Object.keys(command).some(k => !keys.includes(k))
+      || keys.filter(k => k !== 'orderIdentity').some(k => typeof command[k] !== 'string')
       || !ID.test(String(command.runId)) || !ID.test(String(command.exchangeAccountId))
       || !HASH.test(String(command.expectedAccountRefHash))
       || !/^[A-Z0-9]{2,20}-[A-Z0-9]{2,20}$/.test(String(command.productId))) fail('CERTIFICATION_COMMAND_INVALID')
     const [base, quote] = String(command.productId).split('-')
     if (base === quote || base.length + quote.length > 30) fail('CERTIFICATION_COMMAND_INVALID')
+    let identity: Readonly<{orderId:string}|{clientOid:string}> | undefined
+    if (orderInfo) {
+      try { identity = assertBitgetV3OrderLookupIdentity(command.orderIdentity) }
+      catch { fail('CERTIFICATION_COMMAND_INVALID') }
+    }
     return Object.freeze({ runId: String(command.runId), exchangeAccountId: String(command.exchangeAccountId),
-      expectedAccountRefHash: String(command.expectedAccountRefHash), productId: String(command.productId) })
+      expectedAccountRefHash: String(command.expectedAccountRefHash), productId: String(command.productId),
+      ...(identity ? { orderIdentity: identity } : {}) })
   }
   return bounded(collect(), timeoutMs, 'CERTIFICATION_COMMAND_TIMEOUT', cancel)
 }
@@ -96,7 +112,8 @@ export async function routePrivateBitgetCertification(
   const path = new URL(request.url).pathname
   const uta = path.startsWith('/internal/bitget/uta/')
   if (!['/internal/bitget/inspect','/internal/bitget/certify',
-    '/internal/bitget/uta/inspect','/internal/bitget/uta/certify'].includes(path)) {
+    '/internal/bitget/uta/inspect','/internal/bitget/uta/certify',
+    '/internal/bitget/uta/order-info'].includes(path)) {
     return reply({ code: 'CERTIFICATION_ROUTE_NOT_FOUND' },404)
   }
   if (request.method !== 'POST') return reply({ code: 'CERTIFICATION_METHOD_NOT_ALLOWED' },405)
@@ -116,7 +133,9 @@ export async function routePrivateBitgetCertification(
       if (!Number.isSafeInteger(ms) || ms < 1_000_000_000_000 || ms > 9_999_999_999_999) fail('CERTIFICATION_CLOCK_INVALID')
       return ms
     }
-    const command = path.endsWith('/certify') ? await readCommand(request,bodyMs) : null
+    const orderInfo = path === '/internal/bitget/uta/order-info'
+    const command = (path.endsWith('/certify') || orderInfo)
+      ? await readCommand(request,bodyMs,orderInfo) : null
     const started = clock()
     // Validate all bindings before reading any value. No trade binding is used.
     if (![env.BITGET_CERT_API_KEY,env.BITGET_CERT_API_SECRET,env.BITGET_CERT_API_PASSPHRASE]
@@ -136,6 +155,19 @@ export async function routePrivateBitgetCertification(
         authoritiesHash: await canonicalHash(permissions.authorities) }, 200, 'BITGET_UTA_V3')
       if (accountRefHash !== command.expectedAccountRefHash) {
         return reply({ code: 'CERTIFICATION_ACCOUNT_MISMATCH' }, 403, 'BITGET_UTA_V3')
+      }
+      if (orderInfo) {
+        if (!command.orderIdentity) fail('CERTIFICATION_COMMAND_INVALID')
+        const raw = await v3.getOrderInfo(command.orderIdentity)
+        const review = await reviewBitgetV3SpotOrderInfo({
+          response:raw, expectedIdentity:command.orderIdentity,
+          expectedSymbol:command.productId.replace('-', ''), evaluatedAtMs:clock(),
+        })
+        const completed = clock()
+        if (completed < started || completed - started > 65_000) fail('CERTIFICATION_RUN_STALE')
+        return reply({code:'CERTIFICATION_ORDER_INFO_REVIEWED',accountRefHash,
+          accountModelVerified:true, accountMode:permissions.accountMode,
+          review},200,'BITGET_UTA_V3')
       }
       const now = clock()
       const result = await runBitgetV3ReadOnlyCertification({
