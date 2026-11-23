@@ -23,7 +23,11 @@ const locks = Object.freeze({ certifiedForLive: false, providerMutationAllowed: 
   executionAllowed: false, withdrawalAllowed: false, transferAllowed: false,
   automaticRetryAllowed: false, credentialsPersisted: false,
   accountModel: 'UNVERIFIED', contract: 'BITGET_CLASSIC_SPOT_V2' })
-const reply = (payload: Record<string, unknown>, status: number, contract = 'BITGET_CLASSIC_SPOT_V2') => Response.json({ ...payload, ...locks, contract }, {
+const reply = (payload: Record<string, unknown>, status: number, contract = 'BITGET_CLASSIC_SPOT_V2') => Response.json({
+  ...payload, ...locks, contract,
+  accountModel: contract === 'BITGET_UTA_V3' && payload.accountModelVerified === true
+    ? 'UTA_HYBRID' : 'UNVERIFIED',
+}, {
   status, headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },
 })
 class ServiceError extends Error {
