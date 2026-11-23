@@ -50,13 +50,13 @@ jobs:
         shell: bash
 
     steps:
-      - name: Require reviewed default branch and explicit owner read-only acknowledgement
+      - name: Require protected main and explicit owner read-only acknowledgement
         env:
           ACK: ${{ inputs.acknowledge_read_only }}
         run: |
           set -euo pipefail
-          if [[ "$GITHUB_REF" != "refs/heads/main" || "$ACK" != "true" ]]; then
-            echo "Blocked: reviewed main-branch code and explicit read-only acknowledgement required"
+          if [[ "$GITHUB_REF" != "refs/heads/main" || "${GITHUB_REF_PROTECTED:-false}" != "true" || "$ACK" != "true" ]]; then
+            echo "Blocked: protected main branch and explicit read-only acknowledgement required"
             exit 1
           fi
 

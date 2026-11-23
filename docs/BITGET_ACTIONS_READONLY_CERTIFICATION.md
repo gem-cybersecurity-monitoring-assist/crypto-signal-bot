@@ -11,8 +11,8 @@ authorize a trade. It does not change production routes or Cloudflare Workers.
 
 1. Review and merge the upstream UTA v3 certification PR chain through this
    workflow's own PR, including all tests and safety review. The workflow
-   **refuses non-main branches** before receiving secrets.
-2. In GitHub repository settings, create a private deployment environment named
+   **refuses unprotected refs and non-main branches** before loading the Bitget secrets.
+2. In GitHub repository settings, create a deployment environment named
    `bitget-readonly-certification`. Configure required reviewers and allow
    deployments from the protected `main` branch only. Environment creation
    alone **does not** establish reviewer protection; configure it explicitly.
@@ -25,8 +25,7 @@ authorize a trade. It does not change production routes or Cloudflare Workers.
    proposed GitHub-hosted runner.
 4. From the repository's **Actions** tab, choose
    **Bitget UTA Read-Only Certification (manual, no trading)** and run
-   `inspect`, with `acknowledge_read_only` enabled. Review its private job
-   summary. It reports a **hashed** provider user ID and UTA account family;
+   `inspect`, with `acknowledge_read_only` enabled. Review its job summary. Treat it as public on a public repository. It reports a **hashed** provider user ID and UTA account family;
    it never emits raw credentials, UID or balances.
 5. Run `certify` as a **separate owner-triggered workflow**, copying the exact
    account reference SHA-256 from the prior `inspect` job summary into
@@ -43,7 +42,7 @@ Entry point:
 
 ## What is verified
 
-- The GitHub job explicitly enforces its **manually dispatched**, reviewed
+- The GitHub job explicitly enforces its **manually dispatched**, protected
   `main` branch and owner read-only acknowledgement; it requests only
   `contents: read` and has a ten-minute execution ceiling.
 - No Cloudflare token or long-running VM is needed. GitHub Actions usage can

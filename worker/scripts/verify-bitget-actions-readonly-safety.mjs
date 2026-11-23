@@ -12,6 +12,7 @@ for(const [src,needle,why] of [
  [workflow,'contents: read','must have read-only GitHub permissions'],
  [workflow,'environment: bitget-readonly-certification','must require protected environment'],
  [workflow,'refs/heads/main','must be restricted to reviewed main'],
+ [workflow,'"${GITHUB_REF_PROTECTED:-false}" != "true"','must fail closed when main has no protection'],
  [workflow,'acknowledge_read_only','must require owner read-only acknowledgement'],
  [workflow,'BITGET_CERT_API_KEY: ${{ secrets.BITGET_CERT_API_KEY }}','must use GitHub secret binding'],
  [workflow,'BITGET_CERT_API_SECRET: ${{ secrets.BITGET_CERT_API_SECRET }}','must use GitHub secret binding'],
