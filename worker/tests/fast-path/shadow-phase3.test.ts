@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { FeedUpdateResult, MarketAuthorizationInput, NormalizedMarketEvent } from '../../src/fast-path/types'
+import { FeedHealthRegistry } from '../../src/fast-path/feed-health'
+import { normalizeCoinbaseMessage } from '../../src/fast-path/normalizers/coinbase'
 import { eventFixture } from './fixtures'
 import { ShadowFeatureEngine } from '../../src/fast-path/features/shadow-feature-engine'
 import { evaluateShadowScouts } from '../../src/fast-path/scouts/shadow-scouts'
@@ -60,6 +62,77 @@ const validLimits: ShadowRiskLimits = {
   maxSymbolExposure: 200, maxTotalExposure: 1000,
   maxOrderNotional: 100, minShadowNotional: 10,
 }
+
+describe('Phase 3 replay through the feed integrity gate', () => {
+  it('produces deterministic shadow decisions and stops on stale data or a sequence gap', () => {
+    function replay() {
+      const epoch = 1_700_000_000_000
+      const registry = new FeedHealthRegistry()
+      const engine = new ShadowFeatureEngine()
+
+      function ingest(payload: unknown, receivedOffsetMs: number) {
+        const receivedTsMs = epoch + receivedOffsetMs
+        const [event] = normalizeCoinbaseMessage(payload, receivedTsMs)
+        const feed = registry.ingest(event, receivedTsMs)
+        const features = engine.observe(event, feed, 'live', receivedTsMs)
+        const decision = features && assessShadowRisk(
+          features,
+          fuseShadowScouts(features, evaluateShadowScouts(features)),
+          {
+            ...validMarket,
+            freshnessClass: feed.state.freshnessClass,
+            integrityState: feed.state.integrityState,
+            sequenceState: feed.state.sequenceState,
+            heartbeatState: feed.state.heartbeatState,
+          },
+          { ...validLimits, nowMs: receivedTsMs },
+        )
+        return { feed: feed.reason, decision }
+      }
+
+      function update(sequence: number, receivedTsMs: number) {
+        const bid = 100 + sequence / 50
+        return ingest({
+          channel: 'l2_data',
+          timestamp: epoch + sequence * 10 + 1_000,
+          sequence_num: sequence,
+          events: [{
+            type: 'update',
+            product_id: 'BTC-USD',
+            updates: [
+              { side: 'bid', price_level: String(bid), new_quantity: '3' },
+              { side: 'offer', price_level: String(bid + 0.04), new_quantity: '1' },
+            ],
+          }],
+        }, receivedTsMs)
+      }
+
+      const beforeHeartbeat = update(1, 1010)
+      ingest({ channel: 'heartbeats', timestamp: epoch + 1011, sequence_num: 1 }, 1011)
+      return {
+        beforeHeartbeat,
+        warmup: update(2, 1020),
+        eligible: update(3, 1030),
+        stale: update(4, 1541),
+        gap: update(60, 1601),
+        afterGap: update(61, 1611),
+      }
+    }
+
+    const result = replay()
+    expect(replay()).toEqual(result)
+    expect(result.beforeHeartbeat.decision).toBeNull()
+    expect(result.warmup.decision?.status).toBe('BLOCKED')
+    expect(result.eligible.decision).toMatchObject({
+      status: 'SHADOW_ELIGIBLE',
+      simulatedNotional: 40,
+      executionAllowed: false,
+    })
+    expect(result.stale).toEqual({ feed: 'accepted', decision: null })
+    expect(result.gap).toEqual({ feed: 'sequence_gap', decision: null })
+    expect(result.afterGap.decision).toBeNull()
+  })
+})
 
 describe('Phase 3 shadow features — no execution boundary', () => {
   it('computes top-of-book measures without inventing unavailable trade or feed values', () => {
