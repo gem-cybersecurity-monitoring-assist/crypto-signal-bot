@@ -25,7 +25,7 @@ echo "Account: $CLOUDFLARE_ACCOUNT_ID"
 
 echo "[1/4] Validate canonical deployment account and credentials"
 node scripts/verify-worker-deployment-target.mjs
-npm --prefix worker exec -- wrangler whoami --config ../wrangler.toml >/dev/null
+node scripts/verify-cloudflare-token-scope.mjs
 
 echo "[2/4] Run complete paper Worker release gates"
 npm run verify:paper-worker-release
