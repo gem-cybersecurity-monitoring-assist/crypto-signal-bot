@@ -5,6 +5,9 @@ on:
     paths:
       - 'worker/src/**'
       - 'worker/tests/**'
+      - 'worker/scripts/run-bitget-actions-readonly.mjs'
+      - 'worker/scripts/verify-bitget-actions-readonly-safety.mjs'
+      - '.github/workflows/bitget-uta-readonly-certification.yml'
       - 'worker/package.json'
       - 'worker/package-lock.json'
       - 'worker/vitest.config.ts'
@@ -14,6 +17,9 @@ on:
     paths:
       - 'worker/src/**'
       - 'worker/tests/**'
+      - 'worker/scripts/run-bitget-actions-readonly.mjs'
+      - 'worker/scripts/verify-bitget-actions-readonly-safety.mjs'
+      - '.github/workflows/bitget-uta-readonly-certification.yml'
       - 'worker/package.json'
       - 'worker/package-lock.json'
       - 'worker/vitest.config.ts'
@@ -46,3 +52,9 @@ jobs:
         run: npm run test:worker
       - name: Verify paper-only safety
         run: npm --prefix worker run verify:paper-safety
+      - name: Verify Bitget certification without credentials
+        working-directory: worker
+        run: |
+          node scripts/verify-bitget-actions-readonly-safety.mjs
+          node scripts/verify-bitget-v3-private-certification-safety.mjs
+          node --experimental-sqlite --experimental-strip-types --no-warnings --test tests/live-bitget-actions-readonly.test.ts
