@@ -58,7 +58,7 @@ test('V3 permission assertion accepts a unified account', () => {
 })
 
 test('V3 permission assertion rejects non-unified account modes', () => {
-  for (const accountMode of ['classic', 'unified', 'upgrading', 'switching', '']) {
+  for (const accountMode of ['classic', 'upgrading', 'switching', '']) {
     assert.throws(
       () =>
         assertBitgetV3ReadOnlyAuthorities({
@@ -218,4 +218,27 @@ test('V3 read-only client rejects streaming bodies at the byte cap without buffe
     error instanceof BitgetV3ReadOnlyClientError && error.code === 'RESPONSE_TOO_LARGE')
   assert.equal(cancelled, true)
   assert.ok(chunksRead <= 4, 'consumer must not read an unbounded body')
+})
+
+test('accepts both documented UTA modes and read-only permission spellings without granting writes', () => {
+  for (const mode of ['hybrid', 'unified'] as const) {
+    for (const permission of ['read-only', 'readonly'] as const) {
+      const permissions = assertBitgetV3ReadOnlyAuthorities(
+        { ...UNIFIED_SETTINGS, data: { ...UNIFIED_SETTINGS.data, accountMode: mode } },
+        { ...INFO_FIXTURE, data: { ...INFO_FIXTURE.data, permType: permission } },
+      )
+      assert.equal(permissions.accountMode, mode)
+      assert.equal(permissions.permissionsVerified, true)
+      assert.equal(permissions.readOnly, true)
+    }
+  }
+})
+
+test('rejects arbitrary and write-capable permission types even with an otherwise valid account', () => {
+  for (const permission of ['read-and-write', 'read_and_write', 'READONLY', 'withdraw', '', null]) {
+    assert.throws(() => assertBitgetV3ReadOnlyAuthorities(UNIFIED_SETTINGS, {
+      ...INFO_FIXTURE, data: { ...INFO_FIXTURE.data, permType: permission },
+    }), (error: unknown) => error instanceof BitgetV3ReadOnlyClientError
+      && error.code === 'API_KEY_PERMISSIONS_UNVERIFIED')
+  }
 })

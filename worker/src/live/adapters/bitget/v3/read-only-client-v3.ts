@@ -21,7 +21,7 @@
  *
  * Permission verification checks BOTH /api/v3/account/info, which exposes
  * permType and permissions, and /api/v3/account/settings, which exposes the
- * UTA account's actual accountMode ('hybrid' in the documented response).
+ * UTA account's actual accountMode ('hybrid' or 'unified' in the documented enum).
  * It fails closed on unknown/write/withdraw scopes, incompatible account
  * modes, or conflicting user identifiers. No method can send a write request.
  */
@@ -63,7 +63,7 @@ export interface BitgetV3ReadOnlyClientOptions {
 
 export interface BitgetV3AccountPermissions {
   userId: string
-  accountMode: 'hybrid'
+  accountMode: 'hybrid' | 'unified'
   readOnly: true
   permissionsVerified: true
   authorities: readonly string[]
@@ -97,8 +97,8 @@ function requiredSecret(value: string, field: string): string {
  * Verifies (from GET /api/v3/account/settings):
  * - the payload is a well-formed object with a `data` section,
  * - `data.uid` is a non-empty string,
- * - `data.accountMode` is 'hybrid', matching the reviewed UTA sample;
- * - /api/v3/account/info returns the same UID, permType=read-only,
+ * - `data.accountMode` is one of the documented UTA modes: 'hybrid' or 'unified';
+ * - /api/v3/account/info returns the same UID, permType=read-only/readonly,
  *   and only the explicitly approved uta_trade/uta_mgt scopes.
  * Other modes and permissions remain blocked pending separate review.
  */
@@ -126,7 +126,7 @@ export function assertBitgetV3ReadOnlyAuthorities(
     )
   }
   const accountMode = String(data.accountMode ?? '').trim().toLowerCase()
-  if (accountMode !== 'hybrid') {
+  if (accountMode !== 'hybrid' && accountMode !== 'unified') {
     throw new BitgetV3ReadOnlyClientError(
       'ACCOUNT_MODE_UNVERIFIED',
       'Bitget V3 account settings do not match the reviewed UTA account mode',
@@ -139,7 +139,7 @@ export function assertBitgetV3ReadOnlyAuthorities(
   const authorities = info.permissions
   if (infoRoot.code !== '00000'
     || String(info.userId ?? '').trim() !== userId
-    || info.permType !== 'read-only'
+    || !['read-only', 'readonly'].includes(String(info.permType ?? ''))
     || !Array.isArray(authorities)
     || !authorities.includes('uta_trade')
     || !authorities.every((a) => a === 'uta_trade' || a === 'uta_mgt')) {
@@ -148,7 +148,7 @@ export function assertBitgetV3ReadOnlyAuthorities(
       'Bitget V3 account information does not prove a scoped read-only UTA key',
     )
   }
-  return Object.freeze({ userId, accountMode: 'hybrid', readOnly: true, permissionsVerified: true,
+  return Object.freeze({ userId, accountMode: accountMode as 'hybrid' | 'unified', readOnly: true, permissionsVerified: true,
     authorities: Object.freeze([...new Set(authorities)].sort()) })
 }
 
