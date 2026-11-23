@@ -242,3 +242,24 @@ test('rejects arbitrary and write-capable permission types even with an otherwis
       && error.code === 'API_KEY_PERMISSIONS_UNVERIFIED')
   }
 })
+
+test('V3 read-only product lookups scope GET queries to the reviewed Spot symbol', async () => {
+  const observed: string[] = []
+  const client = testClient(async (input, init) => {
+    observed.push(String(input))
+    assert.equal(init?.method, 'GET')
+    return jsonResponse({ code: '00000', data: [] })
+  })
+  await client.getInstruments('SPOT', 'BTCUSDT')
+  await client.getOrderHistory('BTCUSDT')
+  assert.deepEqual(observed.map((raw) => {
+    const u = new URL(raw)
+    return [u.pathname, u.searchParams.get('category'), u.searchParams.get('symbol')]
+  }), [
+    ['/api/v3/market/instruments', 'SPOT', 'BTCUSDT'],
+    ['/api/v3/trade/history-orders', 'SPOT', 'BTCUSDT'],
+  ])
+  assert.throws(() => client.getOrderHistory('!!'), /symbol/)
+  await assert.rejects(client.getInstruments('SPOT', '!!'), /symbol/)
+  assert.equal(observed.length, 2)
+})

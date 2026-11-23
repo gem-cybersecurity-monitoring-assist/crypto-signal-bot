@@ -54,6 +54,17 @@ If permission checks fail, those five subsequent checks are explicitly
 `BLOCKED`, without contacting those provider endpoints. Local negative
 fixtures validate that no downstream requests occur.
 
+For an authorized `certify` request, the supplied `productId` is validated as
+`BASE-QUOTE` and passed as a normalized symbol to both
+`GET /api/v3/market/instruments` and `GET /api/v3/trade/history-orders`.
+The instrument check requires one successful, exact matching **online Spot**
+instrument; absent, suspended, cross-market or ambiguous responses fail.
+The Spot order-history check rejects mismatched-symbol records but accepts
+an empty result as a valid endpoint contract response. This is a bounded
+read-only contract check, **not** complete reconciliation of historical orders
+or proof of order execution. Official Bitget docs specify the optional
+`symbol` request parameter for both endpoints and pagination on history.
+
 Three provider values (`BITGET_CERT_API_KEY`,
 `BITGET_CERT_API_SECRET`, `BITGET_CERT_API_PASSPHRASE`) are read **once per
 invocation** from the declared existing Cloudflare Secrets Store bindings.
