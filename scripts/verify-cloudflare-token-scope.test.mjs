@@ -73,3 +73,16 @@ test('nonzero, malformed and credential-bearing errors never reach deployment lo
     })
   }
 })
+
+test('rejects malformed or duplicate account evidence even when canonical account is present', () => {
+  for (const accounts of [
+    [{ id: canonical }, { id: canonical }],
+    [{ id: canonical }, { id: 'not-a-cloudflare-id' }],
+    [{ id: canonical }, null],
+    [{ id: canonical }, { id: 123 }],
+    [{ id: canonical }, ['unexpected-array']],
+  ]) {
+    assert.throws(() => verifyAuthenticatedCloudflareAccount({ loggedIn: true, accounts }, env),
+      /Cloudflare deployment blocked:/)
+  }
+})
