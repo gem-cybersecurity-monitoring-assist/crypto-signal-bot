@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { fetchBackendJson } from '@/lib/backend';
+import { fetchBackendJson } from '@/lib/backendRuntime';
 
 export interface EarningsSummary {
   total_realized_pnl: number;

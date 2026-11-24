@@ -31,7 +31,7 @@ import { useConsole } from '@/hooks/useConsole';
 import { useMonitoring } from '@/hooks/useMonitoring';
 import { CommandConsolePanel } from '@/components/dashboard/CommandConsolePanel';
 import { MonitoringPanel } from '@/components/dashboard/MonitoringPanel';
-import { fetchBackendJson } from '@/lib/backend';
+import { fetchBackendJson } from '@/lib/backendRuntime';
 import { SurgePanel } from '@/components/dashboard/SurgePanel';
 import { useSurgeScanner } from '@/hooks/useSurgeScanner';
 import { useAuth } from '@/context/AuthContext';

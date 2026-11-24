@@ -1,7 +1,7 @@
 // src/hooks/useSurgeScanner.ts
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { toast } from 'sonner';
-import { fetchBackendJson } from '@/lib/backend';
+import { fetchBackendJson } from '@/lib/backendRuntime';
 
 export interface SurgeScannerConfig {
   scan_interval_seconds: number;

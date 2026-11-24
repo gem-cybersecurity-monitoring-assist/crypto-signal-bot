@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { fetchBackendText } from '@/lib/backend';
+import { fetchBackendText } from '@/lib/backendRuntime';
 
 export interface BackendMetricsSnapshot {
   available: boolean;

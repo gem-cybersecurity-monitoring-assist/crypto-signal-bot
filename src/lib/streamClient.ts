@@ -6,7 +6,7 @@
  * Reconnects with exponential backoff: 1s → 2s → 5s → 10s → 20s → 30s max + jitter.
  */
 
-import { getBackendWebSocketUrl } from '@/lib/backend';
+import { getBackendWebSocketUrl } from '@/lib/backendRuntime';
 
 export type StreamStatus =
   | 'connecting'
