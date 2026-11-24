@@ -30,11 +30,8 @@ node scripts/verify-cloudflare-token-scope.mjs
 echo "[2/4] Run complete paper Worker release gates"
 npm run verify:paper-worker-release
 
-echo "[3/4] Deploy checked wrangler.toml to the supplied account"
-(
-  cd worker
-  ./node_modules/.bin/wrangler deploy --config ../wrangler.toml
-)
+echo "[3/4] Apply the paper admission migration and deploy the Worker"
+npm --prefix worker run deploy
 
 echo "[4/4] Smoke the migrated Worker"
 npm --prefix worker run smoke -- "$WORKER_URL"

@@ -6,6 +6,7 @@ on:
       - 'worker/src/**'
       - 'worker/tests/**'
       - 'worker/scripts/smoke-check.mjs'
+      - 'scripts/rehearse-paper-worker.sh'
       - 'worker/migrations/**'
       - 'worker/scripts/verify-live-candidate-migrations.mjs'
       - 'worker/scripts/run-bitget-actions-readonly.mjs'
@@ -26,6 +27,7 @@ on:
       - 'worker/src/**'
       - 'worker/tests/**'
       - 'worker/scripts/smoke-check.mjs'
+      - 'scripts/rehearse-paper-worker.sh'
       - 'worker/migrations/**'
       - 'worker/scripts/verify-live-candidate-migrations.mjs'
       - 'worker/scripts/run-bitget-actions-readonly.mjs'
@@ -90,3 +92,5 @@ jobs:
         run: |
           ./node_modules/.bin/wrangler deploy --dry-run --config ../wrangler.toml --outdir "$RUNNER_TEMP/gem-paper-worker"
           ./node_modules/.bin/wrangler deploy --dry-run --config ../wrangler.provider-certification.toml --outdir "$RUNNER_TEMP/gem-provider-worker"
+      - name: Rehearse paper deployment against local D1
+        run: bash scripts/rehearse-paper-worker.sh
