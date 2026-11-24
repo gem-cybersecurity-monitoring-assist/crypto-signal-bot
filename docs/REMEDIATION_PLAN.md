@@ -96,21 +96,23 @@ Goal: Align backend module layout with CLAUDE.md target architecture.
 
 ## Phase 3: CI & Testing (Priority: MEDIUM)
 
-### 3.1 Enable automatic CI on push/PR
+### 3.1 Enable automatic CI on push/PR — DONE
 **Problem**: GitHub Actions `ci.yml` is `workflow_dispatch` only. No CI runs on push or PR.
 **Action**: Add `push` and `pull_request` triggers to `ci.yml`. Ensure pytest + tsc + vite build all run.
 
-### 3.2 Expand backend test coverage
-**Missing test files for**:
-- `engine/coordinator.py` — multi-strategy orchestration
-- `engine/execution_router.py` — venue routing
-- `engine/pnl.py` — PnL calculation
-- `engine/state_machine.py` — engine state transitions
-- `config/loader.py` — startup validation
-- `services/portfolio_persistence.py` — DB save/restore
-- `services/websocket_manager.py` — WS broadcast
+### 3.2 Expand backend test coverage — MOSTLY DONE
+**Test files added**:
+- [x] `engine/coordinator.py` — 16 tests (validation, boundary values, exception types)
+- [ ] `engine/execution_router.py` — requires async mocks (deferred)
+- [x] `engine/pnl.py` — 12 tests (FIFO, partial sells, balance tracking)
+- [x] `engine/state_machine.py` — 16 tests (transitions, terminal states, helpers)
+- [x] `engine/broker_normalizer.py` — 14 tests (order/position/fill/health normalization)
+- [x] `engine/venue_registry.py` — 17 tests (register, availability, symbol filtering)
+- [x] `config/loader.py` — 12 tests (sub-config accessors, frozen, URL redaction)
+- [ ] `services/portfolio_persistence.py` — requires DB session mocks (deferred)
+- [x] `services/websocket_manager.py` — 13 tests (connect/disconnect, broadcast, dead clients)
 
-**Action**: Add unit tests for each. Target: 500+ backend tests.
+**Result**: 100+ new tests added. Total backend tests now 580+.
 
 ### 3.3 Add frontend component tests
 **Problem**: 0 component tests. Only 8 contract/integration test files exist.
