@@ -24,6 +24,7 @@ const PublicHome = lazy(() => import('./pages/PublicHome'));
 const ResetPassword = lazy(() => import('./pages/ResetPassword'));
 const Settings = lazy(() => import('./pages/Settings'));
 const Waitlist = lazy(() => import('./pages/Waitlist'));
+const PrivacyPolicy = lazy(() => import('./pages/PrivacyPolicy'));
 
 function RouteLoading({ label = 'Loading application…' }: { label?: string }) {
   return (
@@ -153,6 +154,7 @@ export default function AppCore() {
             <Route path="/waitlist" element={<Waitlist />} />
             <Route path="/status" element={<ProductionStatus />} />
             <Route path="/demo" element={<DashboardDemo />} />
+            <Route path="/privacy" element={<PrivacyPolicy />} />
             <Route path="/dashboard" element={<DashboardPage><Index /></DashboardPage>} />
             <Route path="/backtest" element={<ProtectedPage><Backtest /></ProtectedPage>} />
             <Route path="/portfolio" element={<ProtectedPage><Portfolio /></ProtectedPage>} />
