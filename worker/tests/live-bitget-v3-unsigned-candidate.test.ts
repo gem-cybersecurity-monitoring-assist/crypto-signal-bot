@@ -1,5 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { createHmac } from 'node:crypto'
+import {
+  interpretBitgetV3OrderWriteAcknowledgement,
+  prepareBitgetV3OrderWriteRequest,
+} from '../src/live/adapters/bitget/v3/order-write-protocol-v3.ts'
 import { asDecimalString } from '../src/live/decimal.ts'
 import { canonicalHash } from '../src/live/canonical-json.ts'
 import type { ProductRules } from '../src/live/domain.ts'
@@ -201,4 +206,78 @@ test('V3 cancellation rejects missing, dual, fabricated or unsafe order identiti
   ]) {
     await assert.rejects(buildBitgetV3UnsignedCancelCandidate({ ...common, ...identity }))
   }
+})
+
+const signingFixture = { apiKey: 'fixture-key', secretKey: 'fixture-secret', passphrase: 'fixture-pass' }
+
+test('UTA Spot place and cancel sign the exact wire body for their pinned endpoints', async () => {
+  const input = place()
+  const timestamp = Date.parse(input.builtAt)
+  const candidates = [
+    await buildBitgetV3UnsignedPlaceCandidate(input),
+    await buildBitgetV3UnsignedCancelCandidate({
+      productId: input.request.productId,
+      orderId: '1234567890',
+      clientOrderId: null,
+      accountFamilyReviewHash: input.accountFamilyReviewHash,
+      builtAt: input.builtAt,
+      expiresAt: input.expiresAt,
+    }),
+  ]
+  for (const candidate of candidates) {
+    const request = await prepareBitgetV3OrderWriteRequest(candidate, candidate.candidateHash, signingFixture, timestamp)
+    const endpoint = candidate.operation === 'PLACE' ? '/api/v3/trade/place-order' : '/api/v3/trade/cancel-order'
+    assert.equal(request.url, `https://api.bitget.com${endpoint}`)
+    assert.equal(request.method, 'POST')
+    assert.equal(request.redirect, 'error')
+    assert.equal(request.headers.get('paptrading'), null)
+    assert.equal(request.headers.get('ACCESS-TIMESTAMP'), String(timestamp))
+    assert.equal(request.headers.get('ACCESS-KEY'), signingFixture.apiKey)
+    assert.equal(request.headers.get('ACCESS-PASSPHRASE'), signingFixture.passphrase)
+    const body = await request.text()
+    assert.deepEqual(JSON.parse(body), candidate.unsignedBody)
+    const expected = createHmac('sha256', signingFixture.secretKey)
+      .update(`${timestamp}POST${endpoint}${body}`).digest('base64')
+    assert.equal(request.headers.get('ACCESS-SIGN'), expected)
+  }
+})
+
+test('UTA Spot signing rejects expired, unadmitted and altered order evidence', async () => {
+  const candidate = await buildBitgetV3UnsignedPlaceCandidate(place())
+  const timestamp = Date.parse(candidate.builtAt)
+  const sign = (order = candidate, hash = candidate.candidateHash, now = timestamp) =>
+    prepareBitgetV3OrderWriteRequest(order, hash, signingFixture, now)
+  await assert.rejects(sign(candidate, candidate.candidateHash, Date.parse(candidate.expiresAt)), /signing window/)
+  await assert.rejects(sign(candidate, candidate.candidateHash, timestamp - 1), /signing window/)
+  await assert.rejects(sign(candidate, 'c'.repeat(64)), /admitted Spot operation/)
+  await assert.rejects(sign({ ...candidate, endpoint: '/api/v3/trade/cancel-order' }), /admitted Spot operation/)
+  await assert.rejects(sign({ ...candidate, unsignedBody: { ...candidate.unsignedBody, qty: '999' } }), /evidence changed/)
+})
+
+test('UTA Spot order ACKs require the original order identity and uncertain results require lookup', async () => {
+  const input = place()
+  const opened = await buildBitgetV3UnsignedPlaceCandidate(input)
+  const canceled = await buildBitgetV3UnsignedCancelCandidate({
+    productId: input.request.productId,
+    orderId: '1234567890',
+    clientOrderId: null,
+    accountFamilyReviewHash: input.accountFamilyReviewHash,
+    builtAt: input.builtAt,
+    expiresAt: input.expiresAt,
+  })
+  const data = { clientOid: input.clientOrderId, orderId: '1234567890' }
+  const payload = { code: '00000', data }
+  const accepted = { state: 'ACKNOWLEDGED', orderId: data.orderId }
+  const unknown = { state: 'UNKNOWN_REQUIRES_LOOKUP' }
+  assert.deepEqual(interpretBitgetV3OrderWriteAcknowledgement(opened, 200, payload), accepted)
+  assert.deepEqual(interpretBitgetV3OrderWriteAcknowledgement(canceled, 200, payload), accepted)
+  assert.deepEqual(interpretBitgetV3OrderWriteAcknowledgement(opened, 429, payload), unknown)
+  assert.deepEqual(interpretBitgetV3OrderWriteAcknowledgement(opened, 200, { ...payload, code: '40725' }), unknown)
+  assert.deepEqual(interpretBitgetV3OrderWriteAcknowledgement(opened, 200, { ...payload, data: null }), unknown)
+  assert.deepEqual(interpretBitgetV3OrderWriteAcknowledgement(opened, 200, {
+    ...payload, data: { ...data, clientOid: 'other' },
+  }), unknown)
+  assert.deepEqual(interpretBitgetV3OrderWriteAcknowledgement(canceled, 200, {
+    ...payload, data: { ...data, orderId: '9876543210' },
+  }), unknown)
 })
