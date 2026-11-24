@@ -52,6 +52,7 @@ export interface BitgetV3ReadOnlyCertificationInput {
   evaluatedAt: string
   client: BitgetV3ReadOnlyCertificationClient
   adapter?: BitgetV3ReadOnlyAdapter
+  expectedPermissions?: BitgetV3AccountPermissions
 }
 
 export interface BitgetV3ReadOnlyCertificationCheck {
@@ -153,6 +154,14 @@ export async function runBitgetV3ReadOnlyCertification(
         || !permissions.authorities.every(scope => scope === 'uta_trade' || scope === 'uta_mgt')) {
         throw new Error('V3 API key and UTA account family have not been verified')
       }
+      const expected = input.expectedPermissions
+      if (expected && (
+        permissions.userId !== expected.userId
+        || permissions.accountMode !== expected.accountMode
+        || JSON.stringify([...permissions.authorities].sort()) !== JSON.stringify([...expected.authorities].sort())
+      )) {
+        throw new Error('V3 certification permission identity changed')
+      }
       return {
         reason: null,
         evidence: { userId: permissions.userId, accountMode: permissions.accountMode },
@@ -217,17 +226,22 @@ export async function runBitgetV3ReadOnlyCertification(
       const root = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {}
       const data = root.data && typeof root.data === 'object' ? root.data as Record<string, unknown> : {}
       const rows = data.list
-      if (root.code !== '00000' || !Array.isArray(rows) || rows.length > 100) {
+      if (root.code !== '00000' || !Array.isArray(rows) || rows.length > 10) {
         throw new Error('Bitget V3 order-history contract is unavailable or malformed')
       }
+      // The client requests at most ten Spot history rows; this is a sample, not reconciliation.
+      const orderIds = new Set<string>()
       for (const row of rows) {
         const order = row && typeof row === 'object' ? row as Record<string, unknown> : {}
-        if (order.category !== 'SPOT' || typeof order.orderId !== 'string' || !order.orderId
-          || order.symbol !== symbol) {
-          throw new Error('Bitget V3 order-history contains an unscoped or invalid SPOT record')
+        if (order.category !== 'SPOT' || typeof order.orderId !== 'string' || !order.orderId.trim()
+          || order.orderId !== order.orderId.trim() || order.orderId.length > 128
+          || order.symbol !== symbol || orderIds.has(order.orderId)) {
+          throw new Error('Bitget V3 order-history contains an unscoped, duplicate or invalid SPOT record')
         }
+        orderIds.add(order.orderId)
       }
-      return { reason: null, evidence: { spotOrderHistoryCount: rows.length } }
+      return { reason: null, evidence: { spotOrderHistoryCount: rows.length,
+        symbol, sampledOrderIdentityHash: await canonicalHash([...orderIds].sort()) } }
     }),
     timed('READ_ONLY_ENFORCEMENT', async () => {
       let rejected = 0

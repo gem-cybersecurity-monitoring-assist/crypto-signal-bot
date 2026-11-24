@@ -175,7 +175,7 @@ export async function routePrivateBitgetCertification(
         productId: command.productId,
         observedAt: new Date(now).toISOString(),
         productExpiresAt: new Date(now + 120000).toISOString(),
-        evaluatedAt: new Date(now).toISOString(), client: v3,
+        evaluatedAt: new Date(now).toISOString(), client: v3, expectedPermissions: permissions,
       })
       const completed = clock()
       if (completed < started || completed - started > 65000) fail('CERTIFICATION_RUN_STALE')
