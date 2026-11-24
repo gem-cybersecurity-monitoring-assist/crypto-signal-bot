@@ -10,14 +10,14 @@ from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, Query, Security, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.security.api_key import APIKeyHeader
 from pydantic import BaseModel, Field
 
 from backend.config.runtime import get_runtime_config
+from backend.dependencies import require_auth
 from backend.logic import context, rate_limit
 from backend.logic.audit_store import (
     append_intent,
@@ -38,10 +38,7 @@ from backend.models.decision_trace import (
     SignalSnapshot,
 )
 from backend.logic.earnings import (
-    get_history as earnings_get_history,
-    get_summary as earnings_get_summary,
     record_fill as earnings_record_fill,
-    reset_earnings,
 )
 from backend.logic.exchange_adapter import ExchangeAdapter, build_adapter
 from backend.logic.market_data import BasePublicMarketDataService, build_public_market_data_service
@@ -380,14 +377,6 @@ try:
 except ImportError:
     pass  # uvicorn not installed in this env — proxy headers handled at infra level
 
-_api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
-
-def require_auth(api_key: Optional[str] = Security(_api_key_header)):
-    if not BACKEND_API_KEY:
-        return
-    if api_key != BACKEND_API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid or missing API key")
-
 # Phase 4 — Include public and compatibility routers
 from backend.routes.compatibility import compatibility_router
 from backend.routes.integrations import integrations_router
@@ -399,6 +388,7 @@ from backend.routes.portfolio_v1 import router as portfolio_v1_router
 from backend.services.portfolio.service import start_portfolio_service
 from backend.routes.risk_v1 import router as risk_v1_router
 from backend.routes.console_v1 import router as console_v1_router
+from backend.routes.earnings_v1 import router as earnings_v1_router
 from backend.routes.monitor_v1 import router as monitor_v1_router
 from backend.routes.decisions_v1 import router as decisions_v1_router
 from backend.replay.routes import router as replay_v1_router
