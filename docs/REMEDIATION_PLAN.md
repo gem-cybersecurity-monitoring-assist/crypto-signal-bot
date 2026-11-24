@@ -1,167 +1,195 @@
 # Remediation Plan
 
-> Tracks what was fixed, what remains, and priorities for future work.
+> Prioritized work plan — November 2026. Based on full repository audit.
+> Supersedes prior remediation plan from PR #75.
 
-## Completed Remediation (PR #75)
+## Completed Work (Prior PRs)
 
-### Phase 1: Critical Integration Fixes
-- [x] Kill-switch routes verified wired into main app
-- [x] Config YAML duplicates removed (bitget/btcc)
-- [x] Reconciliation service wired into lifespan + `/reconciliation/status` endpoint
+The following has already been delivered across PRs #75–#81 and the current cleanup branch:
 
-### Phase 2: Incomplete Implementations
-- [x] Paper trading SELL dust cleanup (sub-penny residuals removed)
-- [x] Rate limiter thread-safety + memory leak fix (60s expiry, `threading.Lock`)
+- [x] Kill-switch routes, config dedup, reconciliation wiring (PR #75)
+- [x] Paper trading SELL dust cleanup, rate limiter thread-safety (PR #75)
+- [x] Market data tests, earnings tests, API contract fixes (PR #75)
+- [x] Database persistence (SQLite/Postgres), testnet validation (PR #76–77)
+- [x] Mainnet gate enforcement, retry logic, rejected order persistence (PR #77)
+- [x] WebSocket server, frontend resilience, Render keepalive (PR #79)
+- [x] PostgreSQL-ready persistence layer (SQLAlchemy async) (PR #79)
+- [x] Live market data (CoinGecko primary, fallback chain) (PR #81)
+- [x] CI: pytest + ruff in all workflows, deterministic decision traces (PR #81+)
+- [x] Dead code cleanup: 1,862 lines removed (14 orphaned legacy files) (current branch)
+- [x] .gitignore updated for Python artifacts (current branch)
+- [x] All 8 target documentation files created (stale, being refreshed now)
 
-### Phase 3: Test Coverage
-- [x] `test_market_data.py` — 28 tests (Binance/Bitget/BTCC REST, stale detection, callbacks)
-- [x] `test_earnings.py` — 16 tests (FIFO matching, partial fills, short sells, persistence)
+---
 
-### Phase 4: Deployment Configuration
-- [x] `.env.example` documented for Vercel vs local deployment
+## Phase 1: Backend Structural Refactor (Priority: HIGH)
 
-### Phase 5: Code Quality
-- [x] Dead `ModeControl` class removed from `backend/config/mode_control.py`
-- [x] Type hints added across backend files
+Goal: Align backend module layout with CLAUDE.md target architecture.
 
-### Phase 6: API Contract Cleanup (17 test failures fixed)
-- [x] Health endpoint — added `halted`, `guardian_triggered`, `market_data_mode/connected/source`
-- [x] New `/exchange/status` endpoint — full market data state
-- [x] Price endpoint — proper 404/503 error handling for hybrid/live modes
-- [x] Test fixture — reset `context.*` instead of `app_module.*`
-- [x] Guardian service state leakage — reset globals between tests
-- [x] Kill-switch auth — use `context.BACKEND_API_KEY` (eliminated circular import)
-- [x] Rate limiter test — hit rate-limited endpoint (`/balance` instead of `/health`)
-- [x] Removed price_router shadowing (was breaking `GET /price` without params)
+### 1.1 Split `app.py` monolith
+**Problem**: `app.py` is ~1,400 lines with ~40 inline endpoints.
+**Action**: Extract inline endpoints into existing route modules. `app.py` should contain only FastAPI app creation, lifespan, middleware, and router mounting.
+**Files**: `backend/app.py` → distribute to `backend/routes/`
+**Risk**: High — most endpoints live here. Must preserve all API contracts.
+**Tests**: Run full `test_api.py` (112 tests) after each extraction batch.
 
-### Risk Engine Fix
-- [x] `_process_intent()` — uses symbol-specific position value (was using total portfolio)
-- [x] Risk rules — SELL orders always approved (reduces risk, never increases it)
-- [x] Guardian drawdown — uses total equity instead of USDT-only balance
+### 1.2 Consolidate risk modules
+**Problem**: Risk logic scattered across `logic/risk.py`, `engine/risk_rules.py`, `services/risk_gate/service.py`.
+**Action**: Create `backend/risk/` with submodules: `scoring.py` (from logic/risk.py), `rules.py` (from engine/risk_rules.py), `gate.py` (from services/risk_gate/). Re-export public API from `risk/__init__.py`.
+**Tests**: `test_risk.py` (14) + `test_risk_gate.py` (27) must pass unchanged.
 
-### Phase 7: Documentation (PR #75)
-- [x] `ARCHITECTURE_AUDIT.md` — System overview, module map, dependency status
-- [x] `REMEDIATION_PLAN.md` — Completed work + prioritized remaining items
-- [x] `DECISION_TRACE_SPEC.md` — Structured trace format specification
-- [x] `API_CONTRACTS.md` — Every endpoint with request/response schemas
-- [x] `FRONTEND_STRUCTURE.md` — React app layout, routing, hooks
-- [x] `BACKEND_STRUCTURE.md` — FastAPI module map, patterns, deployment
-- [x] `RUNBOOK_LOCAL.md` — Local dev setup guide with troubleshooting
-- [x] `FINAL_CHANGELOG.md` — Complete changelog for all phases
+### 1.3 Split `logic/` grab-bag
+**Problem**: `logic/` has 18 files with no clear boundary — mixes pure logic, adapters, state, and utilities.
+**Action**:
+- `logic/signals.py`, `logic/strategies.py`, `logic/features.py` → `backend/policy/`
+- `logic/exchange_adapter.py` (PaperAdapter) → `backend/adapters/paper.py`
+- `logic/audit_store.py` → `backend/audit/`
+- `logic/context.py`, `logic/market_data.py`, `logic/market_state.py` → `backend/core/`
+- `logic/paper_trading.py`, `logic/earnings.py`, `logic/rate_limit.py` → keep in `backend/core/` or `backend/logic/`
 
-## Completed Hardening Layers (PR #76 + #77)
+### 1.4 Consolidate duplicate exchange code
+**Problem**: `exchanges/` (standalone clients) duplicates `adapters/exchanges/`.
+**Action**: Determine which is canonical, consolidate, remove the duplicate.
+**Tests**: `test_market_data.py` (28 tests) must pass.
 
-### Database Persistence
-- [x] SQLite persistence for paper portfolio state (survives restarts)
-- [x] Persist orders + audit to database
-- [x] Composite PK (asset, mode) so paper/live can coexist
+### 1.5 Consolidate audit modules
+**Problem**: Audit logic split between `services/audit/service.py` and `logic/audit_store.py`.
+**Action**: Create `backend/audit/` module. Migrate JSON file persistence to DB.
 
-### Testnet Validation
-- [x] `/exchange/validate` endpoint — 4 connectivity checks
-- [x] Exchange adapter health verification
+### 1.6 Resolve duplicate endpoint paths
+**Problem**: Guardian/status and other endpoints appear in multiple route modules.
+**Action**: Audit all routes for path conflicts. Assign each path to exactly one module. Add compatibility redirects if needed.
 
-### Exchange Reconciliation
-- [x] `/reconciliation/exchange` endpoint — balance drift detection
-- [x] Zero-balance drift flagging for untracked exchange assets
+---
 
-### Mainnet Gate Enforcement
-- [x] `ALLOW_MAINNET` flag enforcement in code (blocks live+mainnet without flag)
-- [x] `/mainnet-gate/status` endpoint
-- [x] Graceful fallback to PaperAdapter on gate block (no crash)
-- [x] Consistent parsing: "1", "true", "yes" all accepted
+## Phase 2: Frontend Cleanup (Priority: HIGH)
 
-### Retry Logic
-- [x] Exponential backoff for exchange API calls
-- [x] `with_retry(fn, max_retries=N)` utility + `RetryableAdapter`
+### 2.1 Consolidate API clients
+**Problem**: `api.ts` (3 consumers) lacks auth token injection that `backendRuntime.ts` has.
+**Action**: Migrate `useExchangeStatus.ts`, `IntegrationsStatus.tsx`, `Waitlist.tsx` to use `@/lib/backend`. Delete `api.ts`.
 
-### Review Fixes (PR #77)
-- [x] `ALLOW_MAINNET` parsing consistency (was only "true", now "1"/"yes"/"true")
-- [x] App crash at import time → graceful PaperAdapter fallback
-- [x] Rejected orders (mainnet gate, guardian, risk engine) persisted to DB
+### 2.2 Route or delete stub pages
+**Problem**: 5 unreachable pages (`Audit.tsx`, `Positions.tsx`, `Guardian.tsx`, `Health.tsx`, `PrivacyPolicy.tsx`).
+**Action**: Wire `PrivacyPolicy.tsx` to a public route. Delete the 4 "coming soon" stubs (Audit, Positions, Guardian, Health) — the dashboard already has panels for these.
 
-## Completed System Stabilization (PR #79)
+### 2.3 Fix stale lint script
+**Problem**: `package.json` lint script still references deleted `src/components/LayoutCore.tsx`.
+**Action**: Update the lint script path list.
 
-### WebSocket Server
-- [x] Persistent `/ws` endpoint with connection manager
-- [x] Heartbeat ping/pong every 10s
-- [x] Ticker broadcast (BTC, ETH, SOL, BNB) every 3s
-- [x] Multi-client support with disconnect cleanup
-- [x] Reconnect-safe, async-safe
+### 2.4 Extract Index.tsx state
+**Problem**: `Index.tsx` (709 lines) has extensive local state.
+**Action**: Extract dashboard state into custom hooks or a DashboardContext. Break the file into smaller composable sections.
 
-### Frontend Resilience
-- [x] Exponential backoff reconnect (1s → 30s max)
-- [x] Tab resume/mobile wake reconnection
-- [x] WS ONLINE/OFFLINE status indicator with green/red dots
-- [x] Continuous CSS ticker animation (independent from WS timing)
-- [x] Backend readiness gate (shows "Connecting..." instead of broken UI)
+---
 
-### Render Uptime
-- [x] `/ping` endpoint (responds under 50ms)
-- [x] GitHub Actions keepalive workflow (every 5 min)
-- [x] Startup warm cache (preload ticker data)
+## Phase 3: CI & Testing (Priority: MEDIUM)
 
-### Database Modernization
-- [x] PostgreSQL-ready persistence layer (SQLAlchemy async)
-- [x] SQLite for local dev, Postgres for production
+### 3.1 Enable automatic CI on push/PR
+**Problem**: GitHub Actions `ci.yml` is `workflow_dispatch` only. No CI runs on push or PR.
+**Action**: Add `push` and `pull_request` triggers to `ci.yml`. Ensure pytest + tsc + vite build all run.
 
-## Completed Market Data Fix (PR #81)
+### 3.2 Expand backend test coverage
+**Missing test files for**:
+- `engine/coordinator.py` — multi-strategy orchestration
+- `engine/execution_router.py` — venue routing
+- `engine/pnl.py` — PnL calculation
+- `engine/state_machine.py` — engine state transitions
+- `config/loader.py` — startup validation
+- `services/portfolio_persistence.py` — DB save/restore
+- `services/websocket_manager.py` — WS broadcast
 
-### Live Market Data
-- [x] `PAPER_USE_LIVE_MARKET_DATA=true` by default
-- [x] CoinGecko as primary public market data source (Binance geo-blocked on Render)
-- [x] `_get_live_price_for_ticker()` checks market data service snapshot first
-- [x] Fallback chain: live snapshot → signal cache → synthetic
+**Action**: Add unit tests for each. Target: 500+ backend tests.
 
-## Completed Phase 8 (Current PR)
+### 3.3 Add frontend component tests
+**Problem**: 0 component tests. Only 8 contract/integration test files exist.
+**Action**: Add Vitest + React Testing Library tests for critical components (ProtectedRoute, dashboard panels, auth flow).
 
-### CI Improvements
-- [x] Full pytest suite (`backend/tests/`) added to CircleCI, GitHub Actions CI, production-lock, and release-check
-- [x] Ruff linting added to all CI workflows (advisory mode with `--exit-zero`)
-- [x] `ruff>=0.4` added to backend requirements
-- [x] All workflows now verify `backend/public_app.py` import surface
+### 3.4 Promote ruff to blocking
+**Problem**: Ruff runs in advisory mode (`--exit-zero`).
+**Action**: Fix existing ruff errors, then remove `--exit-zero` from CI.
 
-### Deterministic Decision Trace System
-- [x] `backend/models/decision_trace.py` — Pydantic model with signal, risk, execution, guardian snapshots
-- [x] Trace construction wired into `_process_intent()` — every trading decision emits a structured trace
-- [x] Trace persistence in audit store (`append_trace`, `get_traces`)
-- [x] `GET /traces` endpoint (filterable by symbol, status, limit)
-- [x] `GET /trace/{intent_id}` endpoint for individual trace lookup
-- [x] 10 new tests covering model, serialization, API endpoints, risk rule capture, guardian state capture
+---
 
-### Frontend Polish
-- [x] `onHealthUpdate` callback wired to dashboard — real-time health refresh via WS
-- [x] All 7 WS message types fully wired to dashboard panels
-- [x] Settings persistence via localStorage (already existed, verified working)
-- [x] Backend readiness gate (already existed from PR #79, verified working)
+## Phase 4: Frontend Feature Completion (Priority: MEDIUM)
 
-## Remaining Work
+### 4.1 Implement Settings page
+**Problem**: `Settings.tsx` is routed but shows "coming soon".
+**Action**: Build a config screen showing current trading mode, risk parameters, exchange connections, and guardian thresholds. Read-only in paper mode.
 
-### Priority 1: Engine Completion
-- [ ] Implement `engine/coordinator.py` for multi-strategy orchestration
-- [ ] Wire prediction bot service into engine pipeline
+### 4.2 Implement Positions view
+**Problem**: Dashboard has `PortfolioPanel` but no dedicated positions page.
+**Action**: Build a full positions view with open lots, unrealized PnL, entry prices, and position sizing. Wire to `/portfolio` route.
 
-### Priority 2: Frontend vNext
-- [ ] Positions view panel
-- [ ] Settings/config screen improvements
-- [ ] Health/metrics view improvements
+### 4.3 Enhance standalone pages
+**Action**: Build out standalone Health and Audit pages with more detail than the dashboard panels provide. Wire to routes.
 
-### Priority 3: Lint Cleanup
-- [ ] Fix pre-existing ruff errors (F401 unused imports, E402 module-level imports)
-- [ ] Promote ruff from advisory to blocking in CI
+### 4.4 Improve landing page
+**Problem**: `PublicHome.tsx` is minimal (28 lines).
+**Action**: Build a polished landing page with product overview, features, paper trading callout.
 
-### Priority 4: Live Mode Preparation
-- [ ] Integration tests for Binance/Bitget/BTCC live adapters
+---
+
+## Phase 5: Engine & Integration (Priority: MEDIUM)
+
+### 5.1 Wire prediction bot
+**Problem**: `services/prediction_bot/` exists but is not integrated into the engine pipeline.
+**Action**: Wire into the coordinator's signal evaluation step.
+
+### 5.2 Document Worker/Python boundary
+**Problem**: Both layers have signal/risk/execution logic. The boundary is unclear.
+**Action**: Produce a boundary document clarifying which layer owns which concern. Ensure no duplicate logic paths can produce conflicting decisions.
+
+---
+
+## Phase 6: Documentation Refresh (Priority: LOW)
+
+### 6.1 Refresh all 8 target docs
+All exist in `docs/` but are stale from PR #75 era:
+- [x] `ARCHITECTURE_AUDIT.md` — refreshed (this audit)
+- [x] `REMEDIATION_PLAN.md` — refreshed (this plan)
+- [ ] `DECISION_TRACE_SPEC.md` — verify against current implementation
+- [ ] `API_CONTRACTS.md` — verify against current endpoints
+- [ ] `FRONTEND_STRUCTURE.md` — update for dead code removal and current routing
+- [ ] `BACKEND_STRUCTURE.md` — update for current module map
+- [ ] `RUNBOOK_LOCAL.md` — verify setup instructions still work
+- [ ] `FINAL_CHANGELOG.md` — update with all work since PR #81
+
+---
+
+## Phase 7: Pre-Live Preparation (Priority: LOW — blocked on owner authorization)
+
+These items are needed before live trading can be enabled, per CLAUDE.md safety constraints:
+
+- [ ] Integration tests for Binance/Bitget/BTCC live adapters with testnet
 - [ ] Testnet validation with real exchange credentials
+- [ ] Live adapter review (separate from paper code path)
+- [ ] Withdrawal logic design (intentionally not built yet per CLAUDE.md)
 
-### Priority 5: CI Cleanup
-- [ ] Fix `Vercel – crypto-signal-bot-vbuy` deployment (pre-existing failure, requires Vercel UI removal)
+---
+
+## Execution Order
+
+```
+Phase 1 (backend refactor)  ─────────────────────────────▶  Highest impact, enables all else
+Phase 2 (frontend cleanup)  ─────────────────────────────▶  Quick wins, build passes
+Phase 3 (CI & testing)      ──────────────────▶              Safety net for refactors
+Phase 4 (frontend features) ──────────────────▶              User-facing completeness
+Phase 5 (engine/integration)     ──────▶                     Deeper functionality
+Phase 6 (docs refresh)               ──────▶                 Maintenance
+Phase 7 (pre-live)                         ──────▶           Blocked on authorization
+```
+
+**Recommended start**: Phase 1.1 (split app.py) and Phase 2.1 (consolidate API clients) can run in parallel. Phase 3.1 (CI triggers) is a quick win that should be done early.
+
+---
 
 ## Risk Assessment
 
-| Risk | Severity | Mitigation |
-|------|----------|-----------|
-| Engine coordinator stub | Medium | Priority 1: implement multi-strategy orchestration |
-| No live adapter integration tests | Medium | Priority 4: testnet validation required before live enablement |
-| Prediction bot not integrated | Low | Priority 1: stub exists, needs wiring |
-| Ruff errors in CI (advisory) | Low | Priority 3: cosmetic, doesn't affect runtime |
-| Duplicate Vercel project | Low | Priority 5: requires manual Vercel UI cleanup |
+| Risk | Severity | Phase | Mitigation |
+|------|----------|-------|------------|
+| `app.py` split breaks API contracts | High | 1.1 | Run test_api.py (112 tests) after each extraction |
+| Risk consolidation changes behavior | Medium | 1.2 | All 41 risk tests must pass unchanged |
+| Module moves break imports | Medium | 1.3 | Use re-exports during transition, then remove |
+| No CI catches regressions on PR | Medium | 3.1 | Enable CI triggers early in the plan |
+| Worker/Python overlap causes conflicts | Medium | 5.2 | Document boundary before adding features |
+| Frontend stub deletion confuses users | Low | 2.2 | Dashboard panels already cover the same data |

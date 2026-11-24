@@ -32,5 +32,14 @@ npm-debug.log*
 .vitest/
 .wrangler/
 
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Backend test artifacts
+backend/data/audit.json
+backend/data/earnings.json
+
 # Supabase
 supabase/
