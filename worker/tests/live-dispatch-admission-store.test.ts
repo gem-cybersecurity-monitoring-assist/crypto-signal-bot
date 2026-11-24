@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {DatabaseSync} from 'node:sqlite'
+import { canonicalHash } from '../src/live/canonical-json.ts'
+import { recoverBitgetV3OrderWrite } from '../src/live/adapters/bitget/v3/order-write-recovery-v3.ts'
 import { createBitgetV3OrderTransport } from '../src/live/adapters/bitget/v3/order-write-transport-v3.ts'
 import { createBitgetV3UidQuota } from '../src/live/adapters/bitget/v3/order-write-quota-v3.ts'
 import { buildBitgetV3UnsignedCancelCandidate } from '../src/live/adapters/bitget/v3/unsigned-candidate-v3.ts'
 import {LiveDispatchAdmissionStore,type LiveDispatchClaim} from '../src/live/live-dispatch-admission-store.ts'
 
-function fixture() {
+function fixture(accountRefHash = 'a'.repeat(64)) {
   const db=new DatabaseSync(':memory:')
   let failDailyWrite=false
   const storage={sql:{exec(query:string,...args:(string|number)[]) {
@@ -15,7 +17,7 @@ function fixture() {
     const rows=db.prepare(query).all(...args)
     return {toArray:()=>rows}
   }},transactionSync<T>(fn:()=>T):T {db.exec('BEGIN');try{const value=fn();db.exec('COMMIT');return value}catch(e){db.exec('ROLLBACK');throw e}}}
-  const identity={coordinatorName:'account-1',accountId:'account-1',accountRefHash:'a'.repeat(64),exchange:'BITGET' as const}
+  const identity={coordinatorName:'account-1',accountId:'account-1',accountRefHash,exchange:'BITGET' as const}
   const store=new LiveDispatchAdmissionStore(storage as any,identity)
   return {db,storage,identity,store,failWrite:()=>{failDailyWrite=true},recover:()=>{failDailyWrite=false}}
 }
@@ -84,7 +86,7 @@ test('malformed financial evidence and microscopic overspending leave no attempt
 })
 
 async function transportFixture() {
-  const admitted = fixture()
+  const admitted = fixture(await canonicalHash('6682030769'))
   const nowMs = Date.parse('2026-10-04T10:00:10.000Z')
   const accountRefHash = admitted.identity.accountRefHash
   const providerUidHash = 'e'.repeat(64)
@@ -202,4 +204,71 @@ test('Bitget quota is persisted across instances by UID and operation', async ()
   assert.equal((await quota()(place))?.expiresAtMs, now + 250)
   now -= 1
   await assert.rejects(quota()(place), /quota clock/)
+})
+
+test('an interrupted send can be reconciled after restart using only the stored Bitget identity', async () => {
+  const f = await transportFixture()
+  try {
+    let sends = 0
+    const dispatch = createBitgetV3OrderTransport({
+      ...f.options,
+      async sendOnce() {
+        sends++
+        assert.equal(f.store.getBitgetRecovery('attempt-1')?.candidateHash, f.candidate.candidateHash)
+        throw new Error('connection dropped after the request left the worker')
+      },
+    })
+    assert.equal((await dispatch(f.candidate)).state, 'UNKNOWN_REQUIRES_LOOKUP')
+    assert.equal(sends, 1)
+
+    const restarted = new LiveDispatchAdmissionStore(f.storage as any, f.identity)
+    const requests: Request[] = []
+    let credentialReads = 0
+    let userId = 'different-account'
+    let observedOrderId = '1234567890'
+    const options = {
+      now: f.options.now,
+      secretProvider: {
+        async read() {
+          credentialReads++
+          return f.options.readCredentials()
+        },
+      },
+      async fetcher(input: RequestInfo | URL, init?: RequestInit) {
+        const request = new Request(input, init)
+        requests.push(request)
+        const url = new URL(request.url)
+        const accountInfo = { userId, permType: 'read-only', permissions: ['uta_trade'] }
+        const settings = { uid: userId, accountMode: 'unified' }
+        const order = { orderId: observedOrderId, clientOid: 'original-client-id', category: 'SPOT',
+          symbol: 'BTCUSDT', orderStatus: 'cancelled', side: 'sell', orderType: 'limit' }
+        const data = url.pathname.endsWith('/account/info') ? accountInfo
+          : url.pathname.endsWith('/account/settings') ? settings : order
+        return Response.json({ code: '00000', requestTime: f.options.now(), data })
+      },
+    }
+    assert.deepEqual(await recoverBitgetV3OrderWrite(restarted, options, 'missing'), { state: 'ATTEMPT_NOT_ARMED' })
+    assert.equal(credentialReads, 0)
+    await assert.rejects(recoverBitgetV3OrderWrite(restarted, options, 'attempt-1'), /does not match/)
+    assert.equal(requests.length, 2)
+    userId = '6682030769'
+    observedOrderId = '9999999999'
+    await assert.rejects(recoverBitgetV3OrderWrite(restarted, options, 'attempt-1'), /identity mismatch/)
+    assert.equal(f.db.prepare('SELECT COUNT(*) AS count FROM live_bitget_recovery_observations').get()!.count, 0)
+
+    observedOrderId = '1234567890'
+    const result = await recoverBitgetV3OrderWrite(restarted, options, 'attempt-1')
+    assert.equal(result.state, 'PROVIDER_STATUS_VERIFIED')
+    if (result.state !== 'PROVIDER_STATUS_VERIFIED') throw new Error('missing recovery review')
+    assert.equal(result.review.status, 'cancelled')
+    assert.equal(result.review.ledgerSettlementConfirmed, false)
+    assert.equal(new URL(requests.at(-1)!.url).search, '?orderId=1234567890')
+    assert.ok(requests.every(request => request.method === 'GET'))
+    await recoverBitgetV3OrderWrite(restarted, options, 'attempt-1')
+    assert.equal(credentialReads, 4)
+    assert.equal(f.db.prepare('SELECT COUNT(*) AS count FROM live_bitget_recovery_observations').get()!.count, 1)
+    assert.equal(sends, 1)
+  } finally {
+    f.db.close()
+  }
 })

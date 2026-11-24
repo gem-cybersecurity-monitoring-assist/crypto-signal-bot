@@ -1,5 +1,15 @@
 import { addDecimal, asDecimalString, compareDecimal } from './decimal.ts'
 
+import { assertBitgetV3OrderLookupIdentity } from './adapters/bitget/v3/endpoints-v3.ts'
+import type { BitgetV3OrderInfoReview } from './adapters/bitget/v3/order-info-review-v3.ts'
+
+interface BitgetDispatchRecovery {
+  attemptId: string
+  candidateHash: string
+  productId: string
+  identity: ReturnType<typeof assertBitgetV3OrderLookupIdentity>
+}
+
 export interface LiveDispatchClaim {
   attemptId: string
   idempotencyKey: string
@@ -59,7 +69,17 @@ export class LiveDispatchAdmissionStore {
         current_control_hash TEXT NOT NULL, claimed_at TEXT NOT NULL, utc_day TEXT NOT NULL,
         notional TEXT NOT NULL, UNIQUE(order_id,operation));
         CREATE TABLE IF NOT EXISTS live_dispatch_daily_exposure (
-        utc_day TEXT PRIMARY KEY, used_and_reserved_notional TEXT NOT NULL);`)
+        utc_day TEXT PRIMARY KEY, used_and_reserved_notional TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS live_bitget_send_recovery (
+        attempt_id TEXT PRIMARY KEY REFERENCES live_dispatch_admission(attempt_id),
+        product_id TEXT NOT NULL,
+        identity_kind TEXT NOT NULL CHECK(identity_kind IN ('orderId','clientOid')),
+        identity_value TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS live_bitget_recovery_observations (
+        attempt_id TEXT NOT NULL REFERENCES live_bitget_send_recovery(attempt_id),
+        response_hash TEXT NOT NULL, identity_hash TEXT NOT NULL, status TEXT NOT NULL,
+        observed_at_ms INTEGER NOT NULL,
+        PRIMARY KEY (attempt_id,response_hash));`)
       storage.sql.exec('INSERT OR IGNORE INTO live_dispatch_owner VALUES(1,?,?,?)', identity.accountId, identity.accountRefHash, identity.exchange)
       this.#assertOwner()
     })
@@ -104,4 +124,68 @@ export class LiveDispatchAdmissionStore {
         usedAndReservedNotional:next,executionAllowed:false as const,automaticRetryAllowed:false as const})
     })
   }
+
+  /** Commit the lookup identity before starting a request whose outcome can be lost. */
+  armBitgetRecovery(input: Readonly<BitgetDispatchRecovery>): void {
+    const identity = assertBitgetV3OrderLookupIdentity(input.identity)
+    const kind = 'orderId' in identity ? 'orderId' : 'clientOid'
+    const value = 'orderId' in identity ? identity.orderId : identity.clientOid
+    if (this.#exchange !== 'BITGET' || !identifier.test(input.attemptId) || !hash.test(input.candidateHash)
+      || !/^[A-Z0-9]{2,20}-[A-Z0-9]{2,20}$/.test(input.productId)) {
+      fail('LIVE_DISPATCH_RECOVERY_SCOPE_INVALID')
+    }
+    this.#storage.transactionSync(() => {
+      this.#assertOwner()
+      const rows = this.#storage.sql.exec<{ operation: string }>(
+        'SELECT operation FROM live_dispatch_admission WHERE attempt_id=? AND candidate_hash=?',
+        input.attemptId, input.candidateHash,
+      ).toArray()
+      if (!rows.length || (rows[0].operation === 'PLACE' && kind !== 'clientOid')) {
+        fail('LIVE_DISPATCH_RECOVERY_CLAIM_INVALID')
+      }
+      this.#storage.sql.exec(
+        'INSERT INTO live_bitget_send_recovery VALUES(?,?,?,?)',
+        input.attemptId, input.productId, kind, value,
+      )
+    })
+  }
+
+  getBitgetRecovery(attemptId: string) {
+    if (this.#exchange !== 'BITGET' || !identifier.test(attemptId)) fail('LIVE_DISPATCH_RECOVERY_SCOPE_INVALID')
+    this.#assertOwner()
+    const rows = this.#storage.sql.exec<{
+      product_id: string; identity_kind: string; identity_value: string; candidate_hash: string
+    }>(`SELECT r.product_id,r.identity_kind,r.identity_value,a.candidate_hash
+        FROM live_bitget_send_recovery r JOIN live_dispatch_admission a USING(attempt_id)
+        WHERE r.attempt_id=?`, attemptId).toArray()
+    const row = rows[0]
+    if (!row) return null
+    return Object.freeze({
+      accountRefHash: this.#accountRefHash,
+      attemptId,
+      productId: row.product_id,
+      candidateHash: row.candidate_hash,
+      identity: assertBitgetV3OrderLookupIdentity({ [row.identity_kind]: row.identity_value }),
+    })
+  }
+
+  recordBitgetRecovery(attemptId: string, review: BitgetV3OrderInfoReview, observedAtMs: number): void {
+    if (!hash.test(review.responseHash) || !hash.test(review.observedIdentityHash)
+      || !Number.isSafeInteger(observedAtMs) || observedAtMs <= 0
+      || !['live', 'new', 'partially_filled', 'filled', 'cancelled'].includes(review.status)) {
+      fail('LIVE_DISPATCH_RECOVERY_OBSERVATION_INVALID')
+    }
+    this.#storage.transactionSync(() => {
+      const pending = this.getBitgetRecovery(attemptId)
+      if (!pending || pending.productId.replace('-', '') !== review.productSymbol) {
+        fail('LIVE_DISPATCH_RECOVERY_SCOPE_INVALID')
+      }
+      this.#storage.sql.exec(
+        `INSERT INTO live_bitget_recovery_observations VALUES(?,?,?,?,?)
+         ON CONFLICT(attempt_id,response_hash) DO NOTHING`,
+        attemptId, review.responseHash, review.observedIdentityHash, review.status, observedAtMs,
+      )
+    })
+  }
+
 }

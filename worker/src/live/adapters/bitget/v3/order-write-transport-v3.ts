@@ -126,6 +126,13 @@ export function createBitgetV3OrderTransport(services: BitgetV3OrderTransportSer
       if (!Number.isSafeInteger(sendAt) || sendAt < quota.claimedAtMs
         || sendAt >= Math.min(originalDeadline, quota.expiresAtMs)
         || sendAt - Number(request.headers.get('ACCESS-TIMESTAMP')) >= timeoutMs) return BLOCKED
+      admission.armBitgetRecovery({
+        attemptId, candidateHash, productId: identity.productId, identity: recovery.query,
+      })
+      // The local write may take long enough that the UID reservation is stale.
+      const committedAt = now()
+      if (!Number.isSafeInteger(committedAt) || committedAt < sendAt
+        || committedAt >= Math.min(originalDeadline, quota.expiresAtMs)) return BLOCKED
     } catch {
       return BLOCKED
     }
