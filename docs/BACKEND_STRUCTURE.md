@@ -33,25 +33,33 @@ backend/
 │   ├── risk_rules.py         # Risk rule engine (6 rules)
 │   ├── execution_router.py   # Multi-venue order routing
 │   ├── coordinator.py        # Engine orchestration (stub)
-│   ├── gateway_service.py    # Execution gateway
 │   ├── state_machine.py      # Intent state machine
 │   ├── venue_registry.py     # Venue registry
 │   ├── broker_normalizer.py  # Broker data normalization
 │   ├── pnl.py                # P&L calculation helpers
-│   ├── routing.py            # Routing logic
-│   └── withdrawal_manager.py # Withdrawal handling
+│   └── routing.py            # Routing logic
 │
-├── logic/
+├── policy/                   # Pure logic modules (no state)
+│   ├── features.py           # Feature extraction
+│   ├── indicators.py         # Technical indicators (RSI, ATR, MACD, etc.)
+│   ├── signals.py            # Signal classification / regime detection
+│   └── strategies.py         # Strategy evaluation / combine
+│
+├── risk/                     # Risk scoring and gating
+│   └── scoring.py            # compute_risk_score(), risk_gate()
+│
+├── audit/                    # Audit persistence and tracing
+│   ├── store.py              # Audit trail persistence (intents, orders, events)
+│   └── tracer.py             # Decision trace ring buffer
+│
+├── logic/                    # Runtime logic (stateful, adapter-coupled)
 │   ├── context.py            # Shared mutable state (canonical source)
 │   ├── paper_trading.py      # PaperPortfolio, simulate_fill()
 │   ├── exchange_adapter.py   # Exchange adapter abstraction
 │   ├── earnings.py           # FIFO lot matching, P&L
-│   ├── signals.py            # Signal classification
-│   ├── features.py           # Feature extraction
-│   ├── risk.py               # Risk scoring
+│   ├── signal_engine.py      # Signal orchestration
 │   ├── market_data.py        # Market data aggregation
 │   ├── market_state.py       # Signal/market state caching
-│   ├── audit_store.py        # Audit trail persistence
 │   ├── rate_limit.py         # Per-IP rate limiter
 │   ├── simulate.py           # Multi-step simulation
 │   ├── startup_checks.py     # Boot-time validation
@@ -64,6 +72,9 @@ backend/
 │   └── __init__.py
 │
 ├── routes/
+│   ├── audit_v1.py           # Audit, traces, metrics endpoints
+│   ├── earnings_v1.py        # Earnings summary, history, reset
+│   ├── analysis_v1.py        # Feature analysis, session simulation
 │   ├── kill_switch.py        # Kill-switch routes (global + scoped)
 │   ├── compatibility.py      # Hosted health routes (Render)
 │   ├── intent.py             # Intent routes (alternative router)
@@ -90,10 +101,15 @@ backend/
 │
 ├── adapters/
 │   ├── exchanges/
-│   │   ├── base.py           # Abstract exchange adapter
+│   │   ├── base.py           # Abstract exchange adapter + data types
 │   │   ├── binance.py        # Binance adapter
-│   │   ├── bitget.py         # Bitget adapter (stub)
-│   │   └── btcc.py           # BTCC adapter (stub)
+│   │   ├── binance_us_ohlcv.py # Binance US OHLCV adapter
+│   │   ├── bitget.py         # Bitget adapter
+│   │   ├── btcc.py           # BTCC adapter
+│   │   ├── coinbase.py       # Coinbase adapter
+│   │   ├── coingecko.py      # CoinGecko adapter
+│   │   ├── live.py           # Live adapter (disabled in paper mode)
+│   │   └── retry.py          # Retry/circuit breaker utilities
 │   └── brokers/
 │       └── mt5.py            # MT5 broker adapter
 │
@@ -110,17 +126,24 @@ backend/
 ├── ws/
 │   └── __init__.py           # WebSocket utilities
 │
+├── dependencies.py           # Shared FastAPI auth (require_auth)
+│
 └── tests/
-    ├── test_api.py           # API contract tests (85 tests)
-    ├── test_earnings.py      # Earnings/FIFO tests (16 tests)
-    ├── test_market_data.py   # Market data tests (28 tests)
+    ├── test_api.py           # API contract tests
+    ├── test_dependencies.py  # Auth dependency tests
+    ├── test_route_modules.py # Extracted route module tests
+    ├── test_earnings.py      # Earnings/FIFO tests
+    ├── test_market_data.py   # Market data tests
     ├── test_live_mode.py     # Live mode routing tests
     ├── test_risk.py          # Risk scoring tests
+    ├── test_risk_gate.py     # Risk gating / guardian tests
     ├── test_signals.py       # Signal classification tests
+    ├── test_indicators.py    # Technical indicator tests
+    ├── test_strategies.py    # Strategy evaluation tests
+    ├── test_decision_trace.py # Decision trace tests
     ├── test_mt5_integration.py # MT5 broker tests
     ├── test_runtime_config.py  # Config tests
-    ├── test_repo_audit.py    # Structural audit tests
-    └── ... (15 test files total, 247 tests)
+    └── test_repo_audit.py    # Structural audit tests
 ```
 
 ## Key Patterns
