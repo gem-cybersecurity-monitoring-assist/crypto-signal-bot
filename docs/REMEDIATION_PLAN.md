@@ -26,39 +26,51 @@ The following has already been delivered across PRs #75–#81 and the current cl
 
 Goal: Align backend module layout with CLAUDE.md target architecture.
 
-### 1.1 Split `app.py` monolith
+### 1.1 Split `app.py` monolith — IN PROGRESS
 **Problem**: `app.py` is ~1,400 lines with ~40 inline endpoints.
 **Action**: Extract inline endpoints into existing route modules. `app.py` should contain only FastAPI app creation, lifespan, middleware, and router mounting.
 **Files**: `backend/app.py` → distribute to `backend/routes/`
 **Risk**: High — most endpoints live here. Must preserve all API contracts.
 **Tests**: Run full `test_api.py` (112 tests) after each extraction batch.
+**Progress**:
+- [x] Created `backend/dependencies.py` with shared `require_auth` (sys.modules approach avoids import cycles)
+- [x] Extracted audit/traces/metrics → `backend/routes/audit_v1.py`
+- [x] Extracted earnings endpoints → `backend/routes/earnings_v1.py`
+- [x] Extracted analysis/simulation → `backend/routes/analysis_v1.py`
+- [ ] Remaining ~30 endpoints need DI refactor for module-level state before extraction
 
-### 1.2 Consolidate risk modules
+### 1.2 Consolidate risk modules — PARTIAL
 **Problem**: Risk logic scattered across `logic/risk.py`, `engine/risk_rules.py`, `services/risk_gate/service.py`.
 **Action**: Create `backend/risk/` with submodules: `scoring.py` (from logic/risk.py), `rules.py` (from engine/risk_rules.py), `gate.py` (from services/risk_gate/). Re-export public API from `risk/__init__.py`.
 **Tests**: `test_risk.py` (14) + `test_risk_gate.py` (27) must pass unchanged.
+**Progress**:
+- [x] Moved `logic/risk.py` → `backend/risk/scoring.py` (scoring + gating)
+- [ ] `engine/risk_rules.py` and `services/risk_gate/` already clean; moving is low-value churn
 
-### 1.3 Split `logic/` grab-bag
+### 1.3 Split `logic/` grab-bag — DONE (pure modules)
 **Problem**: `logic/` has 18 files with no clear boundary — mixes pure logic, adapters, state, and utilities.
 **Action**:
-- `logic/signals.py`, `logic/strategies.py`, `logic/features.py` → `backend/policy/`
-- `logic/exchange_adapter.py` (PaperAdapter) → `backend/adapters/paper.py`
-- `logic/audit_store.py` → `backend/audit/`
-- `logic/context.py`, `logic/market_data.py`, `logic/market_state.py` → `backend/core/`
-- `logic/paper_trading.py`, `logic/earnings.py`, `logic/rate_limit.py` → keep in `backend/core/` or `backend/logic/`
+- [x] `logic/features.py`, `logic/indicators.py`, `logic/signals.py`, `logic/strategies.py` → `backend/policy/`
+- [x] `logic/risk.py` → `backend/risk/scoring.py`
+- [x] `logic/audit_store.py` → `backend/audit/store.py`
+- [x] `logic/decision_tracer.py` → `backend/audit/tracer.py`
+- [ ] Remaining runtime-coupled files (`context.py`, `market_data.py`, `exchange_adapter.py`, etc.) stay in `backend/logic/` — moving requires cross-dependency resolution
 
-### 1.4 Consolidate duplicate exchange code
+### 1.4 Consolidate duplicate exchange code — DONE
 **Problem**: `exchanges/` (standalone clients) duplicates `adapters/exchanges/`.
-**Action**: Determine which is canonical, consolidate, remove the duplicate.
-**Tests**: `test_market_data.py` (28 tests) must pass.
+**Action**: Determined `adapters/exchanges/` is canonical (60+ import sites). `exchanges/` was only used by dead engine files.
+**Result**: Removed `backend/exchanges/` (779 lines), `engine/gateway_service.py` (413 lines), `engine/withdrawal_manager.py` (218 lines — forbidden per CLAUDE.md).
+**Tests**: All tests pass.
 
-### 1.5 Consolidate audit modules
+### 1.5 Consolidate audit modules — DONE
 **Problem**: Audit logic split between `services/audit/service.py` and `logic/audit_store.py`.
-**Action**: Create `backend/audit/` module. Migrate JSON file persistence to DB.
+**Action**: Created `backend/audit/` with `store.py` (from logic/audit_store.py) and `tracer.py` (from logic/decision_tracer.py).
+**Result**: All audit import sites updated. Services/audit/ remains for the service layer.
 
-### 1.6 Resolve duplicate endpoint paths
+### 1.6 Resolve duplicate endpoint paths — DONE
 **Problem**: Guardian/status and other endpoints appear in multiple route modules.
-**Action**: Audit all routes for path conflicts. Assign each path to exactly one module. Add compatibility redirects if needed.
+**Action**: Audited all routes programmatically — no duplicate paths found after route extraction.
+**Result**: Clean route map, no conflicts.
 
 ---
 
@@ -150,7 +162,7 @@ All exist in `docs/` but are stale from PR #75 era:
 - [ ] `DECISION_TRACE_SPEC.md` — verify against current implementation
 - [ ] `API_CONTRACTS.md` — verify against current endpoints
 - [ ] `FRONTEND_STRUCTURE.md` — update for dead code removal and current routing
-- [ ] `BACKEND_STRUCTURE.md` — update for current module map
+- [x] `BACKEND_STRUCTURE.md` — updated for current module map
 - [ ] `RUNBOOK_LOCAL.md` — verify setup instructions still work
 - [ ] `FINAL_CHANGELOG.md` — update with all work since PR #81
 
