@@ -83,6 +83,8 @@ jobs:
           npm run verify:migrations
       - name: Verify production smoke checker failure handling
         run: node --test worker/tests/paper-smoke-fail-closed.test.mjs
+      - name: Verify deployment and attestation failure handling
+        run: node --test tests/deployed-paper-verifier*.test.mjs tests/production-attestation-behavior.test.mjs
       - name: Verify Cloudflare release preflight
         run: node --test scripts/verify-cloudflare-token-scope.test.mjs
       - name: Build paper and provider certification Worker bundles
