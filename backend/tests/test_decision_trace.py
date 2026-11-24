@@ -104,7 +104,7 @@ class TestDecisionTraceAPI:
         context.api_error_count = 0
         context.failed_order_count = 0
         context.latest_signal_by_symbol = {}
-        from backend.logic.audit_store import clear_audit
+        from backend.audit.store import clear_audit
         clear_audit()
         yield
         clear_audit()

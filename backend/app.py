@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 from backend.config.runtime import get_runtime_config
 from backend.dependencies import require_auth
 from backend.logic import context, rate_limit
-from backend.logic.audit_store import (
+from backend.audit.store import (
     append_intent,
     append_order,
     append_risk_event,

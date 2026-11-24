@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 
 from backend.logic import rate_limit
-from backend.logic.audit_store import get_audit, get_trace_by_intent_id, get_traces
+from backend.audit.store import get_audit, get_trace_by_intent_id, get_traces
 
 router = APIRouter(dependencies=[Depends(rate_limit.rate_limit)])
 
