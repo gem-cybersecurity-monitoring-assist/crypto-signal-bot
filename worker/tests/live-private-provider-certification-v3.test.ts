@@ -302,3 +302,38 @@ test('private UTA recovery by provider orderId refuses mismatched returned order
   assert.equal((await body(response)).code,'CERTIFICATION_PROVIDER_UNAVAILABLE')
   assert.ok(f.paths.includes(BITGET_V3_ENDPOINTS.orderInfo))
 })
+
+test('UTA certification refuses identity, account-family or permission drift before account-data reads', async () => {
+  for (const change of ['identity', 'mode', 'authority']) {
+    const f = fixture()
+    let permissionReads = 0
+    const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const response = await f.dependencies.fetcher(input, init)
+      const path = new URL(String(input)).pathname
+      if (path === BITGET_V3_ENDPOINTS.accountInfo) permissionReads++
+      if (permissionReads !== 2) return response
+      const payload = await response.json()
+      if (path === BITGET_V3_ENDPOINTS.accountInfo) {
+        if (change === 'identity') payload.data.userId = 'different-fixture-identity'
+        if (change === 'authority') payload.data.permissions = ['uta_trade']
+      } else if (path === BITGET_V3_ENDPOINTS.accountSettings) {
+        if (change === 'identity') payload.data.uid = 'different-fixture-identity'
+        if (change === 'mode') payload.data.accountMode = 'unified'
+      }
+      return Response.json(payload)
+    }
+    const response = await routePrivateBitgetCertification(request('certify', await command()), f.env,
+      { ...f.dependencies, fetcher })
+    const result = await body(response)
+    assert.equal(response.status, 200)
+    assert.equal(result.result.status, 'FAILED', change)
+    assert.equal(result.result.checks[0].status, 'FAIL', change)
+    assert.ok(result.result.checks.slice(1).every(check => check.status === 'BLOCKED'), change)
+    assert.deepEqual(f.paths, [
+      BITGET_V3_ENDPOINTS.accountInfo, BITGET_V3_ENDPOINTS.accountSettings,
+      BITGET_V3_ENDPOINTS.accountInfo, BITGET_V3_ENDPOINTS.accountSettings,
+    ])
+    assertRedacted(result)
+    assert.equal(JSON.stringify(result).includes('different-fixture-identity'), false)
+  }
+})
