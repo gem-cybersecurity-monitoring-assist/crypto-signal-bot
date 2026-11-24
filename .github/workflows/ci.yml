@@ -4,6 +4,14 @@ name: CI (advisory)
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - 'src/**'
+      - 'package.json'
+      - 'tsconfig.json'
+      - 'vite.config.ts'
   pull_request:
     branches: [main]
     paths:

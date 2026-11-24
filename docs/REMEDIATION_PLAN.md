@@ -76,17 +76,17 @@ Goal: Align backend module layout with CLAUDE.md target architecture.
 
 ## Phase 2: Frontend Cleanup (Priority: HIGH)
 
-### 2.1 Consolidate API clients
+### 2.1 Consolidate API clients — DONE
 **Problem**: `api.ts` (3 consumers) lacks auth token injection that `backendRuntime.ts` has.
-**Action**: Migrate `useExchangeStatus.ts`, `IntegrationsStatus.tsx`, `Waitlist.tsx` to use `@/lib/backend`. Delete `api.ts`.
+**Result**: `api.ts` deleted. All consumers migrated to `@/lib/backend`.
 
-### 2.2 Route or delete stub pages
+### 2.2 Route or delete stub pages — DONE
 **Problem**: 5 unreachable pages (`Audit.tsx`, `Positions.tsx`, `Guardian.tsx`, `Health.tsx`, `PrivacyPolicy.tsx`).
-**Action**: Wire `PrivacyPolicy.tsx` to a public route. Delete the 4 "coming soon" stubs (Audit, Positions, Guardian, Health) — the dashboard already has panels for these.
+**Result**: 4 stubs deleted. `PrivacyPolicy.tsx` routed at `/privacy`.
 
-### 2.3 Fix stale lint script
+### 2.3 Fix stale lint script — DONE
 **Problem**: `package.json` lint script still references deleted `src/components/LayoutCore.tsx`.
-**Action**: Update the lint script path list.
+**Result**: Lint script updated to reference current files.
 
 ### 2.4 Extract Index.tsx state
 **Problem**: `Index.tsx` (709 lines) has extensive local state.
