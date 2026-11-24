@@ -88,9 +88,10 @@ Goal: Align backend module layout with CLAUDE.md target architecture.
 **Problem**: `package.json` lint script still references deleted `src/components/LayoutCore.tsx`.
 **Result**: Lint script updated to reference current files.
 
-### 2.4 Extract Index.tsx state
+### 2.4 Extract Index.tsx state — DONE
 **Problem**: `Index.tsx` (709 lines) has extensive local state.
-**Action**: Extract dashboard state into custom hooks or a DashboardContext. Break the file into smaller composable sections.
+**Action**: Extracted auto-trade effect and 8 WebSocket callback handlers into `useDashboardOrchestration` hook.
+**Result**: Index.tsx reduced from 710 → 577 lines. No behavior change.
 
 ---
 
@@ -118,9 +119,9 @@ Goal: Align backend module layout with CLAUDE.md target architecture.
 **Problem**: 0 component tests. Only 8 contract/integration test files exist.
 **Action**: Add Vitest + React Testing Library tests for critical components (ProtectedRoute, dashboard panels, auth flow).
 
-### 3.4 Promote ruff to blocking
+### 3.4 Promote ruff to blocking — DONE
 **Problem**: Ruff runs in advisory mode (`--exit-zero`).
-**Action**: Fix existing ruff errors, then remove `--exit-zero` from CI.
+**Action**: Fixed 13 lint errors (unused vars, semicolon statements, duplicate import, trailing whitespace, unreachable code). Removed `--exit-zero` from CI.
 
 ---
 
