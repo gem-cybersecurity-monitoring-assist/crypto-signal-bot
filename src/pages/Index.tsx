@@ -31,7 +31,7 @@ import { useConsole } from '@/hooks/useConsole';
 import { useMonitoring } from '@/hooks/useMonitoring';
 import { CommandConsolePanel } from '@/components/dashboard/CommandConsolePanel';
 import { MonitoringPanel } from '@/components/dashboard/MonitoringPanel';
-import { fetchBackendJson } from '@/lib/backend';
+import { fetchBackendJson } from '@/lib/backendRuntime';
 import { SurgePanel } from '@/components/dashboard/SurgePanel';
 import { useSurgeScanner } from '@/hooks/useSurgeScanner';
 import { useAuth } from '@/context/AuthContext';
@@ -429,7 +429,7 @@ const Index = () => {
         onSelect={setSelectedSymbol}
       />
 
-      <main className="container mx-auto space-y-6 p-4 lg:space-y-8 lg:p-6">
+      <main aria-label="Certification Mode Dashboard" className="container mx-auto space-y-6 p-4 lg:space-y-8 lg:p-6">
         <RuntimeStatusStrip
           backendConnected={isConnected}
           websocketConnected={wsConnected}

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { fetchBackendJson } from '@/lib/backend';
+import { fetchBackendJson } from '@/lib/backendRuntime';
 import { GuardianStatus } from '@/components/dashboard/GuardianPanel';
 import { normalizeGuardianStatus, type WorkerGuardianStatus } from '@/lib/guardianStatus';
 

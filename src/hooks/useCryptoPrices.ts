@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import type { MutableRefObject } from 'react';
 import { CryptoPrice } from '@/types/crypto';
-import { fetchBackendJson } from '@/lib/backend';
+import { fetchBackendJson } from '@/lib/backendRuntime';
 import { PAPER_DASHBOARD_ROUTES } from '@/lib/paperDashboardRoutes';
 
 interface CoinConfig {

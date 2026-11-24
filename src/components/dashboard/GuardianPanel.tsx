@@ -3,7 +3,7 @@ import { Shield, ShieldAlert, ShieldOff, AlertTriangle, Zap, LockOpen, Ban, Rota
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { fetchBackendJson } from '@/lib/backend';
+import { fetchBackendJson } from '@/lib/backendRuntime';
 import { toast } from 'sonner';
 
 export interface GuardianStatus {

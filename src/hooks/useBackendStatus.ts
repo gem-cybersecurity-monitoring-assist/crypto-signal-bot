@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { fetchBackendJson, getBackendBaseUrl } from '@/lib/backend';
+import { fetchBackendJson, getBackendBaseUrl } from '@/lib/backendRuntime';
 import { PAPER_DASHBOARD_ROUTES } from '@/lib/paperDashboardRoutes';
 
 export interface BackendHealth {

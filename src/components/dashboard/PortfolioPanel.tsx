@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Wallet, TrendingUp, TrendingDown, ArrowUpDown, RefreshCw, Landmark } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-import { describePaperExecutionError, fetchBackendJson } from '@/lib/backend';
+import { describePaperExecutionError, fetchBackendJson } from '@/lib/backendRuntime';
 import { toast } from 'sonner';
 import type { PortfolioState, PaperOrder } from '@/hooks/usePortfolio';
 import { Signal, RiskAssessment } from '@/types/crypto';
