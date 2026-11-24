@@ -363,3 +363,31 @@ test('UTA certification rejects an invalid or self-paired product before provide
   }
   assert.equal(reads, 0)
 })
+
+test('bounded Spot history rejects duplicate identities and responses exceeding the requested ten rows', async () => {
+  const row = (orderId: string) => ({ orderId, category: 'SPOT', symbol: 'BTCUSDT' })
+  for (const list of [
+    [row('duplicate'), row('duplicate')],
+    Array.from({ length: 11 }, (_, i) => row('fixture-' + i)),
+    [row('   ')],
+  ]) {
+    const result = await runBitgetV3ReadOnlyCertification(baseInput({
+      orderHistory: { code: '00000', data: { list } },
+    }))
+    assert.equal(result.status, 'FAILED')
+    assert.equal(result.checks.find(c => c.name === 'ORDER_HISTORY_CONTRACT')?.status, 'FAIL')
+  }
+})
+
+test('Spot history evidence binds sampled identities, not just the number of rows', async () => {
+  const run = async (ids: string[]) => {
+    const result = await runBitgetV3ReadOnlyCertification(baseInput({
+      orderHistory: { code: '00000', data: { list: ids.map(orderId => ({ orderId, category: 'SPOT', symbol: 'BTCUSDT' })) } },
+    }))
+    assert.equal(result.status, 'PASSED')
+    return result.checks.find(c => c.name === 'ORDER_HISTORY_CONTRACT')?.evidenceHash
+  }
+  const a = await run(['fixture-A', 'fixture-B'])
+  assert.notEqual(a, await run(['fixture-C', 'fixture-D']))
+  assert.equal(a, await run(['fixture-B', 'fixture-A']))
+})
