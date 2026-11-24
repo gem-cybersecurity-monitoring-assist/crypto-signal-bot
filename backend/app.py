@@ -10,14 +10,14 @@ from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, Query, Security, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.security.api_key import APIKeyHeader
 from pydantic import BaseModel, Field
 
 from backend.config.runtime import get_runtime_config
+from backend.dependencies import get_backend_api_key, require_auth
 from backend.logic import context, rate_limit
 from backend.logic.audit_store import (
     append_intent,
@@ -38,10 +38,7 @@ from backend.models.decision_trace import (
     SignalSnapshot,
 )
 from backend.logic.earnings import (
-    get_history as earnings_get_history,
-    get_summary as earnings_get_summary,
     record_fill as earnings_record_fill,
-    reset_earnings,
 )
 from backend.logic.exchange_adapter import ExchangeAdapter, build_adapter
 from backend.logic.market_data import BasePublicMarketDataService, build_public_market_data_service
@@ -380,13 +377,7 @@ try:
 except ImportError:
     pass  # uvicorn not installed in this env — proxy headers handled at infra level
 
-_api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
-
-def require_auth(api_key: Optional[str] = Security(_api_key_header)):
-    if not BACKEND_API_KEY:
-        return
-    if api_key != BACKEND_API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+app.dependency_overrides[get_backend_api_key] = lambda: BACKEND_API_KEY
 
 # Phase 4 — Include public and compatibility routers
 from backend.routes.compatibility import compatibility_router
@@ -399,6 +390,7 @@ from backend.routes.portfolio_v1 import router as portfolio_v1_router
 from backend.services.portfolio.service import start_portfolio_service
 from backend.routes.risk_v1 import router as risk_v1_router
 from backend.routes.console_v1 import router as console_v1_router
+from backend.routes.earnings_v1 import router as earnings_v1_router
 from backend.routes.monitor_v1 import router as monitor_v1_router
 from backend.routes.decisions_v1 import router as decisions_v1_router
 from backend.replay.routes import router as replay_v1_router
@@ -410,7 +402,7 @@ from backend.services.guardian_bot.monitor import start_guardian_monitor
 # with synthetic fallback; the routes/price.py router requires a live
 # MarketDataService and would shadow the synthetic-safe defaults.
 _registered_paths = {getattr(route, "path", None) for route in app.routes}
-for _router in (compatibility_router, integrations_router, waitlist_router, kill_switch_router, signals_v1_router, portfolio_v1_router, risk_v1_router, console_v1_router, monitor_v1_router, decisions_v1_router, replay_v1_router, backtest_v1_router):
+for _router in (compatibility_router, integrations_router, waitlist_router, kill_switch_router, signals_v1_router, portfolio_v1_router, risk_v1_router, console_v1_router, monitor_v1_router, decisions_v1_router, replay_v1_router, backtest_v1_router, earnings_v1_router):
     _router_paths = {getattr(route, "path", None) for route in _router.routes}
     if not _router_paths.issubset(_registered_paths):
         app.include_router(_router)
@@ -1291,19 +1283,6 @@ def withdraw_api(req: WithdrawRequest, _: None = Depends(require_auth)):
         status_code=403,
         detail={"mode": "safe", "reason": "withdrawals_disabled", "message": "Withdrawals are disabled. This is a paper-only simulator."}
     )
-
-@app.get("/earnings/summary", dependencies=[Depends(rate_limit.rate_limit)])
-def get_earnings_summary_api():
-    return earnings_get_summary()
-
-@app.get("/earnings/history", dependencies=[Depends(rate_limit.rate_limit)])
-def get_earnings_history_api(symbol: Optional[str] = Query(None), limit: int = Query(100, ge=1, le=500)):
-    return {"trades": earnings_get_history(symbol=symbol, limit=limit)}
-
-@app.post("/earnings/reset")
-def reset_earnings_ledger_api(_: None = Depends(require_auth)):
-    reset_earnings()
-    return {"status": "ok", "message": "Earnings ledger cleared"}
 
 @app.websocket("/stream")
 async def stream_endpoint(ws: WebSocket):

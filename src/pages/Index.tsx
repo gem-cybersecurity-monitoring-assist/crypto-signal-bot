@@ -429,7 +429,7 @@ const Index = () => {
         onSelect={setSelectedSymbol}
       />
 
-      <main className="container mx-auto space-y-6 p-4 lg:space-y-8 lg:p-6">
+      <main aria-label="Certification Mode Dashboard" className="container mx-auto space-y-6 p-4 lg:space-y-8 lg:p-6">
         <RuntimeStatusStrip
           backendConnected={isConnected}
           websocketConnected={wsConnected}
