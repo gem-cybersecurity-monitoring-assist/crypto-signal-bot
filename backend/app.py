@@ -394,7 +394,6 @@ from backend.routes.decisions_v1 import router as decisions_v1_router
 from backend.replay.routes import router as replay_v1_router
 from backend.backtest.routes import router as backtest_v1_router
 from backend.routes.audit_v1 import router as audit_v1_router
-from backend.routes.earnings_v1 import router as earnings_v1_router
 from backend.routes.analysis_v1 import router as analysis_v1_router
 from backend.services.guardian_bot.monitor import start_guardian_monitor
 

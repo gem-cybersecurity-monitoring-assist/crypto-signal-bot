@@ -184,7 +184,7 @@ class TestDecisionTraceAPI:
     def test_trace_captures_risk_rules(self):
         from backend.app import app
         client = TestClient(app)
-        resp = client.post("/intent/paper", json={
+        client.post("/intent/paper", json={
             "symbol": "BTCUSDT", "side": "BUY",
             "order_type": "MARKET", "quantity": 0.001,
         })
