@@ -5,6 +5,7 @@ on:
     paths:
       - 'worker/src/**'
       - 'worker/tests/**'
+      - 'worker/scripts/smoke-check.mjs'
       - 'worker/migrations/**'
       - 'worker/scripts/verify-live-candidate-migrations.mjs'
       - 'worker/scripts/run-bitget-actions-readonly.mjs'
@@ -24,6 +25,7 @@ on:
     paths:
       - 'worker/src/**'
       - 'worker/tests/**'
+      - 'worker/scripts/smoke-check.mjs'
       - 'worker/migrations/**'
       - 'worker/scripts/verify-live-candidate-migrations.mjs'
       - 'worker/scripts/run-bitget-actions-readonly.mjs'
@@ -77,6 +79,8 @@ jobs:
         run: |
           npm run test:live-foundation
           npm run verify:migrations
+      - name: Verify production smoke checker failure handling
+        run: node --test worker/tests/paper-smoke-fail-closed.test.mjs
       - name: Verify Cloudflare release preflight
         run: node --test scripts/verify-cloudflare-token-scope.test.mjs
       - name: Build paper and provider certification Worker bundles
