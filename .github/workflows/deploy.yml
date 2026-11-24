@@ -24,8 +24,8 @@ on:
           - "true"
 
 concurrency:
-  group: cloudflare-worker-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ inputs.deploy_worker == 'true' && 'crypto-signal-bot-production-release' || format('crypto-signal-bot-validation-{0}-{1}', github.workflow, github.ref) }}
+  cancel-in-progress: ${{ inputs.deploy_worker != 'true' }}
 
 env:
   WORKER_URL: https://crypto-signal-bot-api.analyzer-d94.workers.dev

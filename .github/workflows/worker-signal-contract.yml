@@ -18,6 +18,7 @@ on:
       - 'scripts/verify-cloudflare-token-scope*.mjs'
       - '.github/workflows/worker-signal-contract.yml'
       - '.github/workflows/deploy.yml'
+      - '.github/workflows/self-hosted-release.yml'
   push:
     branches: [main]
     paths:
@@ -36,6 +37,7 @@ on:
       - 'scripts/verify-cloudflare-token-scope*.mjs'
       - '.github/workflows/worker-signal-contract.yml'
       - '.github/workflows/deploy.yml'
+      - '.github/workflows/self-hosted-release.yml'
 
 permissions:
   contents: read
