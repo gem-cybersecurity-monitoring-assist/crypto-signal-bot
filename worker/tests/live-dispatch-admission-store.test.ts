@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {DatabaseSync} from 'node:sqlite'
+import { createBitgetV3OrderTransport } from '../src/live/adapters/bitget/v3/order-write-transport-v3.ts'
+import { createBitgetV3UidQuota } from '../src/live/adapters/bitget/v3/order-write-quota-v3.ts'
+import { buildBitgetV3UnsignedCancelCandidate } from '../src/live/adapters/bitget/v3/unsigned-candidate-v3.ts'
 import {LiveDispatchAdmissionStore,type LiveDispatchClaim} from '../src/live/live-dispatch-admission-store.ts'
 
 function fixture() {
@@ -78,4 +81,125 @@ test('malformed financial evidence and microscopic overspending leave no attempt
     }
     assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM live_dispatch_admission').get()!.n,0)
   }finally{f.db.close()}
+})
+
+async function transportFixture() {
+  const admitted = fixture()
+  const nowMs = Date.parse('2026-10-04T10:00:10.000Z')
+  const accountRefHash = admitted.identity.accountRefHash
+  const providerUidHash = 'e'.repeat(64)
+  const candidate = await buildBitgetV3UnsignedCancelCandidate({
+    productId: 'BTC-USDT', orderId: '1234567890', clientOrderId: null,
+    accountFamilyReviewHash: 'f'.repeat(64),
+    builtAt: new Date(nowMs - 10).toISOString(), expiresAt: new Date(nowMs + 10_000).toISOString(),
+  })
+  const controls = {
+    admission: { ...claim(), operation: 'CANCEL' as const, notional: null, candidateHash: candidate.candidateHash },
+    validUntilMs: nowMs + 1_000,
+  }
+  const options = {
+    admission: admitted.store, accountRefHash, providerUidHash, now: () => nowMs,
+    resolveControls: async () => controls,
+    readCredentials: async () => ({ apiKey: 'fixture', secretKey: 'fixture', passphrase: 'fixture' }),
+    claimUidQuota: async () => ({
+      providerUidHash, operation: 'CANCEL' as const, claimedAtMs: nowMs, expiresAtMs: nowMs + 250,
+    }),
+    sendOnce: async (_request: Request) => Response.json({ code: '00000', data: { orderId: '1234567890' } }),
+  }
+  return { ...admitted, options, candidate }
+}
+
+test('mainnet transport admits once across concurrent calls and a coordinator restart', async () => {
+  const f = await transportFixture()
+  try {
+    const requests: Request[] = []
+    const sendOnce = async (request: Request) => {
+      requests.push(request)
+      return f.options.sendOnce(request)
+    }
+    const dispatch = createBitgetV3OrderTransport({ ...f.options, sendOnce })
+    const results = await Promise.all([dispatch(f.candidate), dispatch(f.candidate)])
+    const restarted = new LiveDispatchAdmissionStore(f.storage as any, f.identity)
+    const retry = createBitgetV3OrderTransport({ ...f.options, admission: restarted, sendOnce })
+    assert.deepEqual(await retry(f.candidate), { state: 'BLOCKED_BEFORE_SEND' })
+    assert.equal(requests.length, 1)
+    assert.equal(requests[0].method, 'POST')
+    assert.equal(requests[0].redirect, 'error')
+    assert.equal(results.filter(result => result.state === 'ACKNOWLEDGED').length, 1)
+    const outcome = results.find(result => result.state === 'ACKNOWLEDGED')
+    assert.deepEqual(outcome?.recovery, {
+      method: 'GET', endpoint: '/api/v3/trade/order-info', query: { orderId: '1234567890' },
+    })
+  } finally {
+    f.db.close()
+  }
+})
+
+test('revocation after durable admission prevents credentials and send', async () => {
+  const f = await transportFixture()
+  try {
+    let checks = 0
+    let credentialReads = 0
+    const dispatch = createBitgetV3OrderTransport({
+      ...f.options,
+      resolveControls: async () => ++checks === 1 ? f.options.resolveControls() : null,
+      readCredentials: async () => { credentialReads++; return f.options.readCredentials() },
+    })
+    assert.deepEqual(await dispatch(f.candidate), { state: 'BLOCKED_BEFORE_SEND' })
+    assert.equal(credentialReads, 0)
+    assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM live_dispatch_admission').get()!.n, 1)
+  } finally {
+    f.db.close()
+  }
+})
+
+test('timeout, oversized response and network error are ambiguous and never retry the POST', async () => {
+  const invalidResponses = [
+    async (_request: Request): Promise<Response> => { throw new Error('connection reset') },
+    async (_request: Request) => new Response('x'.repeat(16_385)),
+    (request: Request) => new Promise<Response>(resolve => {
+      request.signal.addEventListener('abort', () => resolve(new Response('late')))
+    }),
+  ]
+  for (const respond of invalidResponses) {
+    const f = await transportFixture()
+    try {
+      let sends = 0
+      const dispatch = createBitgetV3OrderTransport({
+        ...f.options, timeoutMs: 20,
+        sendOnce(request) { sends++; return respond(request) },
+      })
+      const result = await dispatch(f.candidate)
+      assert.equal(result.state, 'UNKNOWN_REQUIRES_LOOKUP')
+      assert.deepEqual(await dispatch(f.candidate), { state: 'BLOCKED_BEFORE_SEND' })
+      assert.equal(sends, 1)
+    } finally {
+      f.db.close()
+    }
+  }
+})
+
+test('Bitget quota is persisted across instances by UID and operation', async () => {
+  const values = new Map<string, unknown>()
+  const storage = {
+    async transaction<T>(run: (txn: object) => Promise<T>) {
+      return run({
+        get: async (key: string) => values.get(key),
+        put: async (key: string, value: unknown) => { values.set(key, value) },
+      })
+    },
+  } as Pick<DurableObjectStorage, 'transaction'>
+  const providerUidHash = 'e'.repeat(64)
+  let now = 1_000_000
+  const quota = () => createBitgetV3UidQuota(storage, providerUidHash, () => now)
+  const place = { providerUidHash, operation: 'PLACE' as const }
+  for (let i = 0; i < 10; i++) assert.ok(await quota()(place))
+  assert.equal(await quota()(place), null)
+  assert.ok(await quota()({ providerUidHash, operation: 'CANCEL' }))
+  now += 1_249
+  assert.equal(await quota()(place), null)
+  now += 1
+  assert.equal((await quota()(place))?.expiresAtMs, now + 250)
+  now -= 1
+  await assert.rejects(quota()(place), /quota clock/)
 })
