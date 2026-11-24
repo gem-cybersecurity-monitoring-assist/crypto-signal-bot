@@ -52,6 +52,7 @@ export interface BitgetV3ReadOnlyCertificationInput {
   evaluatedAt: string
   client: BitgetV3ReadOnlyCertificationClient
   adapter?: BitgetV3ReadOnlyAdapter
+  expectedPermissions?: BitgetV3AccountPermissions
 }
 
 export interface BitgetV3ReadOnlyCertificationCheck {
@@ -152,6 +153,14 @@ export async function runBitgetV3ReadOnlyCertification(
         || !permissions.authorities.includes('uta_trade')
         || !permissions.authorities.every(scope => scope === 'uta_trade' || scope === 'uta_mgt')) {
         throw new Error('V3 API key and UTA account family have not been verified')
+      }
+      const expected = input.expectedPermissions
+      if (expected && (
+        permissions.userId !== expected.userId
+        || permissions.accountMode !== expected.accountMode
+        || JSON.stringify([...permissions.authorities].sort()) !== JSON.stringify([...expected.authorities].sort())
+      )) {
+        throw new Error('V3 certification permission identity changed')
       }
       return {
         reason: null,
