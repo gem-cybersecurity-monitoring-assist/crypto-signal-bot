@@ -43,3 +43,4 @@ backend/data/earnings.json
 
 # Supabase
 supabase/
+crypto_bot.db

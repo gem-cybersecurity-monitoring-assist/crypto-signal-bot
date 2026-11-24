@@ -1,9 +1,17 @@
-name: CI (manual advisory)
-# Required validation is owned by CircleCI. GitHub Actions is manual-only so
+name: CI (advisory)
+# Required validation is owned by CircleCI. GitHub Actions CI is advisory —
 # GitHub billing or runner availability cannot block engineering or release review.
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - 'src/**'
+      - 'package.json'
+      - 'tsconfig.json'
+      - 'vite.config.ts'
 
 jobs:
   backend:

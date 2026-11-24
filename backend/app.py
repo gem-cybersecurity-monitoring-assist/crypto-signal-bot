@@ -403,6 +403,9 @@ from backend.routes.monitor_v1 import router as monitor_v1_router
 from backend.routes.decisions_v1 import router as decisions_v1_router
 from backend.replay.routes import router as replay_v1_router
 from backend.backtest.routes import router as backtest_v1_router
+from backend.routes.audit_v1 import router as audit_v1_router
+from backend.routes.earnings_v1 import router as earnings_v1_router
+from backend.routes.analysis_v1 import router as analysis_v1_router
 from backend.services.guardian_bot.monitor import start_guardian_monitor
 
 # Track already registered paths to avoid duplicates
@@ -410,7 +413,7 @@ from backend.services.guardian_bot.monitor import start_guardian_monitor
 # with synthetic fallback; the routes/price.py router requires a live
 # MarketDataService and would shadow the synthetic-safe defaults.
 _registered_paths = {getattr(route, "path", None) for route in app.routes}
-for _router in (compatibility_router, integrations_router, waitlist_router, kill_switch_router, signals_v1_router, portfolio_v1_router, risk_v1_router, console_v1_router, monitor_v1_router, decisions_v1_router, replay_v1_router, backtest_v1_router):
+for _router in (compatibility_router, integrations_router, waitlist_router, kill_switch_router, signals_v1_router, portfolio_v1_router, risk_v1_router, console_v1_router, monitor_v1_router, decisions_v1_router, replay_v1_router, backtest_v1_router, audit_v1_router, earnings_v1_router, analysis_v1_router):
     _router_paths = {getattr(route, "path", None) for route in _router.routes}
     if not _router_paths.issubset(_registered_paths):
         app.include_router(_router)
@@ -1195,32 +1198,9 @@ def get_price_api(symbol: str = Query("BTCUSDT")):
         "exchange": None, "market_data_mode": "synthetic_paper",
     }
 
-@app.get("/audit", dependencies=[Depends(rate_limit.rate_limit)])
-def get_audit_trail_api():
-    return get_audit()
-
-@app.get("/traces", dependencies=[Depends(rate_limit.rate_limit)])
-def get_traces_api(
-    symbol: Optional[str] = Query(None, description="Filter by symbol"),
-    status: Optional[str] = Query(None, description="Filter by execution status"),
-    limit: int = Query(50, ge=1, le=500, description="Max traces to return"),
-):
-    return get_traces(symbol=symbol, status=status, limit=limit)
-
-@app.get("/trace/{intent_id}", dependencies=[Depends(rate_limit.rate_limit)])
-def get_trace_by_intent(intent_id: str):
-    trace = get_trace_by_intent_id(intent_id)
-    if trace is None:
-        raise HTTPException(status_code=404, detail="Trace not found")
-    return trace
-
-@app.get("/metrics")
-def get_metrics_api():
-    try:
-        from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
-        return JSONResponse(content=generate_latest().decode("utf-8"), media_type=CONTENT_TYPE_LATEST)
-    except ImportError:
-        return {"message": "prometheus_client not installed"}
+# Audit/traces/metrics endpoints moved to routes/audit_v1.py
+# Earnings endpoints moved to routes/earnings_v1.py
+# Analysis/simulation endpoints moved to routes/analysis_v1.py
 
 @app.get("/signal/latest", dependencies=[Depends(rate_limit.rate_limit)])
 def get_signal_latest_api(symbol: Optional[str] = Query(None)):
@@ -1291,19 +1271,6 @@ def withdraw_api(req: WithdrawRequest, _: None = Depends(require_auth)):
         status_code=403,
         detail={"mode": "safe", "reason": "withdrawals_disabled", "message": "Withdrawals are disabled. This is a paper-only simulator."}
     )
-
-@app.get("/earnings/summary", dependencies=[Depends(rate_limit.rate_limit)])
-def get_earnings_summary_api():
-    return earnings_get_summary()
-
-@app.get("/earnings/history", dependencies=[Depends(rate_limit.rate_limit)])
-def get_earnings_history_api(symbol: Optional[str] = Query(None), limit: int = Query(100, ge=1, le=500)):
-    return {"trades": earnings_get_history(symbol=symbol, limit=limit)}
-
-@app.post("/earnings/reset")
-def reset_earnings_ledger_api(_: None = Depends(require_auth)):
-    reset_earnings()
-    return {"status": "ok", "message": "Earnings ledger cleared"}
 
 @app.websocket("/stream")
 async def stream_endpoint(ws: WebSocket):
@@ -1379,51 +1346,6 @@ async def websocket_updates_legacy(ws: WebSocket):
         context.ws_clients.discard(ws)
         await ws_manager.disconnect(ws)
 
-@app.post("/analyze-features", response_model=AnalyzeResponse)
-def analyze_features_api(payload: FeaturesIn) -> AnalyzeResponse:
-    feats = Features(
-        spread_pct=payload.spread_pct, imbalance=payload.imbalance,
-        mid_vel=payload.mid_vel, depth_decay=payload.depth_decay,
-        vol_spike=payload.vol_spike, short_reversal=payload.short_reversal,
-    )
-    signal = build_signal(feats)
-    risk_score = compute_risk_score(feats)
-    decision = risk_gate(signal, risk_score)
-    return AnalyzeResponse(
-        signal={
-            "direction": signal.direction, "confidence": signal.confidence,
-            "regime": signal.regime, "horizon_minutes": signal.horizon_minutes,
-            "meta": signal.meta,
-        },
-        risk_score=risk_score,
-        decision={
-            "intent": decision.intent, "approved": decision.approved,
-            "size_fraction": decision.size_fraction, "reason": decision.reason,
-            "risk_score": decision.risk_score,
-        },
-    )
-
-@app.post("/simulate-session", response_model=SimulateResponse)
-def simulate_session_api(req: SimulateRequest) -> SimulateResponse:
-    internal_steps: List[StepResult] = simulate_session(req.steps, req.start_price)
-    steps_out: List[SimStepOut] = []
-    for s in internal_steps:
-        steps_out.append(
-            SimStepOut(
-                step=s.step, price=s.price,
-                signal={
-                    "direction": s.signal.direction, "confidence": s.signal.confidence,
-                    "regime": s.signal.regime, "meta": s.signal.meta,
-                },
-                risk_score=s.risk_score,
-                decision={
-                    "intent": s.decision.intent, "approved": s.decision.approved,
-                    "size_fraction": s.decision.size_fraction, "reason": s.decision.reason,
-                    "risk_score": s.decision.risk_score,
-                },
-            )
-        )
-    return SimulateResponse(symbol=req.symbol, steps=steps_out)
 
 # ---------------------------------------------------------------------------
 # Static File Serving (SPA Fallback)
