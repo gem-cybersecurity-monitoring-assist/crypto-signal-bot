@@ -48,8 +48,8 @@ from backend.logic.paper_trading import (
     _parse_symbol,
     _synthetic_price,
 )
-from backend.logic.risk import compute_risk_score, risk_gate
-from backend.logic.signals import build_signal
+from backend.risk.scoring import compute_risk_score, risk_gate
+from backend.policy.signals import build_signal
 from backend.engine.risk_rules import RiskRuleEngine
 from backend.engine.mainnet_gate import assert_not_mainnet, mainnet_status, MainnetGateError
 from backend.models.risk import RiskContext

@@ -5,8 +5,8 @@ from typing import Any, Dict, List
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
-from backend.logic.risk import compute_risk_score, risk_gate
-from backend.logic.signals import build_signal
+from backend.risk.scoring import compute_risk_score, risk_gate
+from backend.policy.signals import build_signal
 from backend.logic.simulate import StepResult, simulate_session
 from backend.models_core import Features
 
