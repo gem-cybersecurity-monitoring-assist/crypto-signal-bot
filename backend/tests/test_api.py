@@ -1059,11 +1059,20 @@ class TestNewWsEndpoint:
 
 class TestRenderReadinessEndpoint:
     def test_ready_reports_auth_env_presence_without_secret(self):
-        with patch.dict("os.environ", {"BACKEND_API_KEY": "secret", "CORS_ORIGINS": "https://a.example"}, clear=False):
-            from backend.render_entrypoint import app as render_app
+        saved_routes = list(app_module.app.router.routes)
+        try:
+            with patch.dict("os.environ", {"BACKEND_API_KEY": "secret", "CORS_ORIGINS": "https://a.example"}, clear=False):
+                import importlib
+                import sys
+                sys.modules.pop("backend.render_entrypoint", None)
+                import backend.render_entrypoint as render_mod
+                importlib.reload(render_mod)
+                render_app = render_mod.app
 
-            render_client = TestClient(render_app)
-            resp = render_client.get("/ready")
+                render_client = TestClient(render_app)
+                resp = render_client.get("/ready")
+        finally:
+            app_module.app.router.routes = saved_routes
 
         assert resp.status_code == 200
         data = resp.json()

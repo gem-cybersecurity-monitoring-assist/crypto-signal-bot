@@ -7,33 +7,24 @@ import logging
 import os
 import time
 from contextlib import asynccontextmanager
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
-from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
 
 from backend.config.runtime import get_runtime_config
-from backend.dependencies import require_auth
-from backend.logic import context, rate_limit
+from backend.logic import context, rate_limit  # noqa: F401 — rate_limit accessed by tests via backend.app
 from backend.audit.store import (
     append_intent,
     append_order,
     append_risk_event,
     append_trace,
-    append_withdrawal,
-    get_audit,
-    get_trace_by_intent_id,
-    get_traces,
 )
 from backend.models.decision_trace import (
     DecisionTrace,
-    ExecutionSnapshot,
     GuardianSnapshot,
-    RiskSnapshot,
     RuleTrace,
     SignalSnapshot,
 )
@@ -48,12 +39,9 @@ from backend.logic.paper_trading import (
     _parse_symbol,
     _synthetic_price,
 )
-from backend.risk.scoring import compute_risk_score, risk_gate
-from backend.policy.signals import build_signal
 from backend.engine.risk_rules import RiskRuleEngine
-from backend.engine.mainnet_gate import assert_not_mainnet, mainnet_status, MainnetGateError
+from backend.engine.mainnet_gate import assert_not_mainnet, MainnetGateError
 from backend.models.risk import RiskContext
-from backend.logic.simulate import StepResult, simulate_session
 from backend.db.session import init_db, close_db
 from backend.services.portfolio_persistence import (
     persist_portfolio,
@@ -66,17 +54,14 @@ from backend.models.execution_intent import (
     IntentResponse,
     IntentStatus,
 )
-from backend.models_core import Features
 from backend.services.guardian_bot.service import TradingScopeHaltedError, assert_scope_allowed
 from backend.logic.market_state import build_market_state_result
 from backend.services.reconciliation.service import (
     start_reconciliation,
     stop_reconciliation,
-    get_latest_report as get_reconciliation_report,
 )
-from backend.services.stream_service import stream_manager, handle_stream_client
+from backend.services.stream_service import handle_stream_client
 from backend.services.websocket_manager import (
-    ConnectionManager,
     broadcast_ticker_loop,
     manager as ws_manager,
 )
@@ -383,9 +368,7 @@ from backend.routes.integrations import integrations_router
 from backend.routes.kill_switch import router as kill_switch_router
 from backend.routes.waitlist import waitlist_router
 from backend.routes.signals_v1 import router as signals_v1_router
-from backend.services.signal_service.service import start_signal_service
 from backend.routes.portfolio_v1 import router as portfolio_v1_router
-from backend.services.portfolio.service import start_portfolio_service
 from backend.routes.risk_v1 import router as risk_v1_router
 from backend.routes.console_v1 import router as console_v1_router
 from backend.routes.earnings_v1 import router as earnings_v1_router
@@ -395,14 +378,17 @@ from backend.replay.routes import router as replay_v1_router
 from backend.backtest.routes import router as backtest_v1_router
 from backend.routes.audit_v1 import router as audit_v1_router
 from backend.routes.analysis_v1 import router as analysis_v1_router
-from backend.services.guardian_bot.monitor import start_guardian_monitor
+from backend.routes.config_v1 import router as config_v1_router
+from backend.routes.exchange_v1 import router as exchange_v1_router
+from backend.routes.trading_v1 import router as trading_v1_router
+from backend.routes.reconciliation_v1 import router as reconciliation_v1_router
 
 # Track already registered paths to avoid duplicates
 # NOTE: price_router excluded — app.py defines /price and /exchange/status
 # with synthetic fallback; the routes/price.py router requires a live
 # MarketDataService and would shadow the synthetic-safe defaults.
 _registered_paths = {getattr(route, "path", None) for route in app.routes}
-for _router in (compatibility_router, integrations_router, waitlist_router, kill_switch_router, signals_v1_router, portfolio_v1_router, risk_v1_router, console_v1_router, monitor_v1_router, decisions_v1_router, replay_v1_router, backtest_v1_router, audit_v1_router, earnings_v1_router, analysis_v1_router):
+for _router in (compatibility_router, integrations_router, waitlist_router, kill_switch_router, signals_v1_router, portfolio_v1_router, risk_v1_router, console_v1_router, monitor_v1_router, decisions_v1_router, replay_v1_router, backtest_v1_router, audit_v1_router, earnings_v1_router, analysis_v1_router, config_v1_router, exchange_v1_router, trading_v1_router, reconciliation_v1_router):
     _router_paths = {getattr(route, "path", None) for route in _router.routes}
     if not _router_paths.issubset(_registered_paths):
         app.include_router(_router)
@@ -557,61 +543,9 @@ def _get_market_data_status() -> Dict[str, Any]:
     }
 
 # ---------------------------------------------------------------------------
-# Models & Exceptions
+# Exceptions
 # ---------------------------------------------------------------------------
-class MarketStateRequest(BaseModel):
-    symbol: str = "BTCUSDT"
-    price: float = Field(..., gt=0)
-    change24h: float = 0.0
-    volume24h: float = 0.0
-    marketCap: float = 0.0
-    riskTolerance: float = Field(0.5, ge=0.0, le=1.0)
-    spreadStressThreshold: float = Field(0.002, gt=0.0)
-    volatilitySensitivity: float = Field(0.5, ge=0.0, le=2.0)
-    positionSizeFraction: float = Field(0.1, ge=0.0, le=1.0)
-
-class KillSwitchRequest(BaseModel):
-    activate: bool
-    reason: Optional[str] = None
-
-class FeaturesIn(BaseModel):
-    spread_pct: float = 0.02
-    imbalance: float = 0.0
-    mid_vel: float = 0.0
-    depth_decay: float = 0.0
-    vol_spike: bool = False
-    short_reversal: bool = False
-
-class AnalyzeResponse(BaseModel):
-    signal: Dict[str, Any]
-    risk_score: float
-    decision: Dict[str, Any]
-
-class SimulateRequest(BaseModel):
-    steps: int = 30
-    start_price: float = 30000.0
-    symbol: str = "BTC/USDT"
-
-class SimStepOut(BaseModel):
-    step: int
-    price: float
-    signal: Dict[str, Any]
-    risk_score: float
-    decision: Dict[str, Any]
-
-class SimulateResponse(BaseModel):
-    symbol: str
-    steps: List[SimStepOut]
-
-class WithdrawRequest(BaseModel):
-    asset: str = "USDT"
-    amount: float = 100.0
-    address: str = "paper-wallet"
-
-class ExchangeAPIError(Exception):
-    def __init__(self, message: str, status_code: int = 502):
-        self.message = message
-        self.status_code = status_code
+from backend.exceptions import ExchangeAPIError  # noqa: E402
 
 @app.exception_handler(ExchangeAPIError)
 async def exchange_error_handler(request, exc: ExchangeAPIError):
@@ -857,409 +791,14 @@ def _process_intent_inner(
     context.schedule_background(_guardian_check_and_broadcast)
     return IntentResponse(id=intent.id, status=intent.status.value, notes=intent.notes)
 
-# ---------------------------------------------------------------------------
-# API Endpoints
-# ---------------------------------------------------------------------------
-@app.get("/config", dependencies=[Depends(rate_limit.rate_limit)])
-def get_config():
-    return {
-        "trading_mode": TRADING_MODE,
-        "network": NETWORK,
-        "adapter": exchange_adapter.mode,
-        "exchange": EXCHANGE,
-        "adapter_exchange": exchange_adapter.exchange,
-        "market_data_public_exchange": MARKET_DATA_PUBLIC_EXCHANGE,
-        "paper_use_live_market_data": PAPER_USE_LIVE_MARKET_DATA,
-        "config_path": RUNTIME_CONFIG.config_path,
-        "cors_origins": ALLOWED_ORIGINS,
-        "kill_switch_active": context.kill_switch_active,
-        "auth_enabled": bool(BACKEND_API_KEY),
-        "rate_limit_rpm": RUNTIME_CONFIG.rate_limit_rpm,
-        "risk_engine": {
-            "rules": [r.name for r in risk_engine.rules],
-            "max_position_pct": RUNTIME_CONFIG.risk.max_position_pct,
-            "max_daily_loss_pct": RUNTIME_CONFIG.risk.max_daily_loss_pct,
-            "volatility_threshold": RUNTIME_CONFIG.risk.volatility_threshold,
-            "max_leverage": RUNTIME_CONFIG.risk.max_leverage,
-            "max_slippage_pct": RUNTIME_CONFIG.risk.max_slippage_pct,
-        },
-    }
-
-@app.get("/mainnet-gate/status", dependencies=[Depends(rate_limit.rate_limit)])
-def get_mainnet_gate_status():
-    return mainnet_status()
-
-@app.get("/exchange/status", dependencies=[Depends(rate_limit.rate_limit)])
-def get_exchange_status():
-    market_data = _get_market_data_status()
-    execution_mode = exchange_adapter.mode
-    return {
-        "trading_mode": TRADING_MODE,
-        "execution_mode": execution_mode,
-        "market_data_mode": market_data["market_data_mode"],
-        "paper_use_live_market_data": PAPER_USE_LIVE_MARKET_DATA,
-        "exchange": market_data.get("exchange"),
-        "connected": market_data.get("connected", False),
-        "connection_state": market_data.get("connection_state", "disabled"),
-        "fallback_active": market_data.get("fallback_active", False),
-        "stale": market_data.get("stale", True),
-        "symbols": market_data.get("symbols", []),
-        "source": market_data.get("source", "synthetic"),
-        "last_update_ts": market_data.get("last_update_ts"),
-        "last_error": market_data.get("last_error"),
-    }
-
-
-@app.get("/exchange/supported")
-def get_exchange_supported():
-    """Return support matrix for all exchanges. Acceptance checklist item 14."""
-    return {
-        "supported": [
-            {
-                "id": "binance",
-                "name": "Binance",
-                "public_market_data": True,
-                "ohlcv_source": "binance_us_ohlcv",
-                "paper_execution": False,
-                "testnet_auth_supported": False,
-                "live_execution_enabled": False,
-                "adapter_file": "backend/adapters/exchanges/binance.py",
-            },
-            {
-                "id": "bitget",
-                "name": "Bitget",
-                "public_market_data": True,
-                "ohlcv_source": "bitget_rest",
-                "paper_execution": False,
-                "testnet_auth_supported": False,
-                "live_execution_enabled": False,
-                "adapter_file": "backend/adapters/exchanges/bitget.py",
-            },
-            {
-                "id": "btcc",
-                "name": "BTCC",
-                "public_market_data": True,
-                "ohlcv_source": "btcc_rest",
-                "paper_execution": False,
-                "testnet_auth_supported": False,
-                "live_execution_enabled": False,
-                "adapter_file": "backend/adapters/exchanges/btcc.py",
-            },
-            {
-                "id": "coinbase",
-                "name": "Coinbase",
-                "public_market_data": True,
-                "ohlcv_source": "coinbase_rest",
-                "paper_execution": False,
-                "sandbox_auth_supported": False,
-                "live_execution_enabled": False,
-                "adapter_file": "backend/adapters/exchanges/coinbase.py",
-            },
-            {
-                "id": "coingecko",
-                "name": "CoinGecko",
-                "public_market_data": True,
-                "ohlcv_source": "coingecko_rest",
-                "paper_execution": False,
-                "live_execution_enabled": False,
-                "adapter_file": "backend/adapters/exchanges/coingecko.py",
-                "note": "Primary market data source (geo-restriction fallback)",
-            },
-        ],
-        "execution_adapter": "paper",
-        "live_execution_enabled": False,
-        "withdrawals_enabled": False,
-        "safe_mode": True,
-        "trading_mode": TRADING_MODE,
-    }
-
-
-@app.get("/market/feed/status")
-def get_market_feed_status():
-    """Return current market data feed status."""
-    mds = _get_market_data_status()
-    symbols = mds.get("symbols", [])
-    last_ts = mds.get("last_update_ts")
-    stale = mds.get("stale", True)
-    connected = mds.get("connected", False)
-    return {
-        "source": mds.get("source", "synthetic"),
-        "exchange": mds.get("exchange", MARKET_DATA_PUBLIC_EXCHANGE),
-        "symbol_count": len(symbols),
-        "symbols": symbols,
-        "connected": connected,
-        "stale": stale,
-        "last_tick_at": last_ts,
-        "latency_ms": None,
-        "fallback_active": mds.get("fallback_active", False),
-        "safe_mode_reason": None if connected else "market_data_unavailable",
-        "market_data_mode": mds.get("market_data_mode", "synthetic"),
-    }
-
-
-@app.post("/exchange/test-connection")
-async def test_exchange_connection(exchange: str = "coinbase"):
-    """
-    Diagnostic connectivity test. Does NOT place real orders.
-    Checks public API reachability for the specified exchange.
-    Supports: binance, bitget, btcc, coinbase, coingecko.
-    """
-    supported = {"binance", "bitget", "btcc", "coinbase", "coingecko"}
-    if exchange not in supported:
-        return {"mode": "safe", "reason": f"unsupported_exchange: {exchange}", "supported": list(supported)}
-
-    result = {
-        "exchange": exchange,
-        "test_type": "public_market_data",
-        "live_orders_attempted": False,
-        "secrets_exposed": False,
-        "mode": "diagnostic",
-    }
-
-    try:
-        import httpx
-        urls = {
-            "binance": "https://api.binance.us/api/v3/ping",
-            "bitget": "https://api.bitget.com/api/v2/public/time",
-            "btcc": "https://api.btcc.com/api/v1/info",
-            "coinbase": "https://api.coinbase.com/api/v3/brokerage/products/BTC-USDT",
-            "coingecko": "https://api.coingecko.com/api/v3/ping",
-        }
-        url = urls[exchange]
-        import time as _time
-        t0 = _time.time()
-        async with httpx.AsyncClient(timeout=8.0) as client:
-            r = await client.get(url)
-        latency_ms = round((_time.time() - t0) * 1000, 1)
-        result["connected"] = r.status_code in (200, 201)
-        result["http_status"] = r.status_code
-        result["latency_ms"] = latency_ms
-        result["error"] = None
-    except Exception as exc:
-        result["connected"] = False
-        result["latency_ms"] = None
-        result["error"] = str(exc)
-
-    return result
-
-
-@app.get("/version")
-def get_version():
-    """Return application version and runtime info."""
-    import sys
-    import os
-    return {
-        "version": "1.0.0",
-        "mode": TRADING_MODE,
-        "network": NETWORK,
-        "python": sys.version.split()[0],
-        "safe_mode": True,
-        "live_execution_enabled": False,
-        "withdrawals_enabled": False,
-        "paper_only": True,
-    }
-
-
-@app.get("/runtime/status")
-def get_runtime_status():
-    """Return backend runtime state: uptime, safe mode, exchange, WS clients."""
-    import time as _time
-    mds = _get_market_data_status()
-    from backend.services.guardian_bot import service as _gsvc
-    ws_clients = len(getattr(ws_manager, "_connections", []))
-    return {
-        "mode": TRADING_MODE,
-        "network": NETWORK,
-        "safe_mode": True,
-        "live_execution_enabled": False,
-        "withdrawals_enabled": False,
-        "selected_exchange": MARKET_DATA_PUBLIC_EXCHANGE,
-        "feed_connected": mds.get("connected", False),
-        "feed_stale": mds.get("stale", True),
-        "feed_source": mds.get("source", "synthetic"),
-        "websocket_clients": ws_clients,
-        "guardian_triggered": _gsvc._triggered,
-        "kill_switch_active": _gsvc._kill_switch_active,
-        "drawdown_pct": _gsvc._drawdown_pct,
-    }
-
-
-@app.get("/config/snapshot")
-def get_config_snapshot():
-    """Return current config without secrets. Includes config hash."""
-    import hashlib
-    import json as _json
-    cfg = get_runtime_config()
-    snapshot = {
-        "trading_mode": TRADING_MODE,
-        "network": NETWORK,
-        "market_data_source": MARKET_DATA_PUBLIC_EXCHANGE,
-        "paper_use_live_market_data": PAPER_USE_LIVE_MARKET_DATA,
-        "live_execution_enabled": exchange_adapter.mode == "mainnet",
-        "withdrawals_enabled": False,
-        "safe_mode": exchange_adapter.mode != "mainnet",
-        "risk": {
-            "max_position_pct": cfg.risk.max_position_pct if hasattr(cfg, "risk") else None,
-            "max_daily_loss_pct": cfg.risk.max_daily_loss_pct if hasattr(cfg, "risk") else None,
-        },
-    }
-    snapshot_str = _json.dumps(snapshot, sort_keys=True)
-    snapshot["config_hash"] = hashlib.sha256(snapshot_str.encode()).hexdigest()[:16]
-    return snapshot
-
-
-@app.get("/balance", dependencies=[Depends(rate_limit.rate_limit)])
-def get_balance():
-    return {"balances": paper_portfolio.get_all_balances(), "positions": paper_portfolio.get_positions()}
-
-@app.get("/positions", dependencies=[Depends(rate_limit.rate_limit)])
-def get_positions_api():
-    return {"positions": paper_portfolio.get_positions()}
-
-@app.get("/orders", dependencies=[Depends(rate_limit.rate_limit)])
-def get_orders_api(symbol: Optional[str] = Query(None)):
-    orders = paper_portfolio.open_orders
-    if symbol:
-        orders = [o for o in orders if o.symbol == symbol.upper()]
-    return {
-        "orders": [
-            {
-                "id": o.id, "symbol": o.symbol, "side": o.side.value,
-                "order_type": o.order_type.value, "quantity": o.quantity,
-                "price": o.price, "status": o.status.value, "created_at": o.created_at,
-            } for o in orders
-        ]
-    }
-
-@app.get("/price", dependencies=[Depends(rate_limit.rate_limit)])
-def get_price_api(symbol: str = Query("BTCUSDT")):
-    normalized_symbol = symbol.upper()
-    if TRADING_MODE == "paper" and PAPER_USE_LIVE_MARKET_DATA:
-        svc = _get_market_data_service()
-        snap = svc.get_snapshot(normalized_symbol)
-        if snap:
-            return {
-                "symbol": normalized_symbol,
-                "price": round(float(snap["price"]), 8),
-                "change24h": float(snap.get("change24h", 0.0)),
-                "volume24h": float(snap.get("volume24h", 0.0)),
-                "marketCap": float(snap.get("marketCap", 0.0)),
-                "timestamp": snap["timestamp"],
-                "source": snap.get("source", f"{MARKET_DATA_PUBLIC_EXCHANGE}-public"),
-                "exchange": snap.get("exchange", MARKET_DATA_PUBLIC_EXCHANGE),
-                "market_data_mode": "live_public_paper",
-            }
-        status = svc.get_status()
-        tracked = status.get("symbols", [])
-        if normalized_symbol not in [s.upper() for s in tracked]:
-            return JSONResponse(
-                status_code=404,
-                content={"error": "symbol_not_tracked", "symbol": normalized_symbol},
-            )
-        return JSONResponse(
-            status_code=503,
-            content={"error": "market_data_unavailable", "symbol": normalized_symbol},
-        )
-
-    if TRADING_MODE == "live" and exchange_adapter.mode != "paper":
-        try:
-            price = exchange_adapter.get_price(normalized_symbol)
-            return {
-                "symbol": normalized_symbol, "price": round(float(price), 8),
-                "change24h": 0.0, "volume24h": 0.0, "marketCap": 0.0,
-                "timestamp": time.time(), "source": "execution_adapter",
-                "exchange": exchange_adapter.exchange, "market_data_mode": "execution_only",
-            }
-        except Exception as exc:
-            raise ExchangeAPIError(f"Live price fetch failed: {exc}")
-
-    if TRADING_MODE == "live" and exchange_adapter.mode == "paper":
-        return JSONResponse(
-            status_code=503,
-            content={"error": "execution_unavailable", "symbol": normalized_symbol},
-        )
-
-    price = _synthetic_price(normalized_symbol)
-    return {
-        "symbol": normalized_symbol, "price": round(price, 8),
-        "change24h": 0.0, "volume24h": 0.0, "marketCap": 0.0,
-        "timestamp": time.time(), "source": "synthetic",
-        "exchange": None, "market_data_mode": "synthetic_paper",
-    }
-
-# Audit/traces/metrics endpoints moved to routes/audit_v1.py
-# Earnings endpoints moved to routes/earnings_v1.py
-# Analysis/simulation endpoints moved to routes/analysis_v1.py
-
-@app.get("/signal/latest", dependencies=[Depends(rate_limit.rate_limit)])
-def get_signal_latest_api(symbol: Optional[str] = Query(None)):
-    from backend.logic.market_state import get_signal_latest
-    return get_signal_latest(symbol)
-
-
-@app.get("/exchange/circuit-breakers", dependencies=[Depends(rate_limit.rate_limit)])
-def get_circuit_breaker_statuses():
-    """Return circuit breaker state for all registered exchange adapters."""
-    try:
-        from backend.services.exchange_retry import get_all_circuit_breaker_statuses
-        return {"circuit_breakers": get_all_circuit_breaker_statuses()}
-    except Exception as exc:
-        return {"circuit_breakers": [], "error": str(exc)}
-
-@app.get("/reconciliation/status", dependencies=[Depends(rate_limit.rate_limit)])
-async def reconciliation_status_api():
-    report = await get_reconciliation_report()
-    if report is None:
-        return {"status": "no_report", "message": "Reconciliation has not run yet."}
-    return {"status": "ok", "report": report}
-
-@app.get("/reconciliation/exchange", dependencies=[Depends(rate_limit.rate_limit)])
-def exchange_reconciliation_api():
-    from backend.services.exchange_reconciler import reconcile_against_exchange
-    result = reconcile_against_exchange(
-        adapter=exchange_adapter,
-        local_balances=dict(paper_portfolio.balances),
-    )
-    return result.to_dict()
-
-@app.get("/exchange/validate", dependencies=[Depends(rate_limit.rate_limit)])
-def exchange_validation_api():
-    from backend.services.testnet_validator import validate_exchange_connectivity
-    result = validate_exchange_connectivity(exchange_adapter)
-    return result.to_dict()
-
-@app.post("/market-state")
-def market_state_api(req: MarketStateRequest, _: None = Depends(require_auth)):
-    result = build_market_state_result(
-        symbol=req.symbol, price=req.price, change24h=req.change24h,
-        volume24h=req.volume24h, market_cap=req.marketCap,
-        risk_tolerance=req.riskTolerance, spread_stress_threshold=req.spreadStressThreshold,
-        volatility_sensitivity=req.volatilitySensitivity,
-        position_size_fraction=req.positionSizeFraction,
-        market_data_source="manual",
-    )
-    normalized_symbol = req.symbol.upper()
-    timestamp = time.time()
-    context.latest_signal_by_symbol[normalized_symbol] = result
-    context.latest_signal_ts_by_symbol[normalized_symbol] = timestamp
-    return result
-
-@app.post("/intent/live", response_model=IntentResponse)
-def intent_live_api(req: IntentRequest, _: None = Depends(require_auth)):
-    # Live execution is hard-disabled in app.py for safety
-    raise HTTPException(status_code=403, detail="Live execution is disabled.")
-
-@app.post("/intent/paper", response_model=IntentResponse)
-def intent_paper_api(req: IntentRequest, _: None = Depends(require_auth)):
-    return _process_intent(req, "paper")
-
-@app.post("/withdraw")
-def withdraw_api(req: WithdrawRequest, _: None = Depends(require_auth)):
-    # Withdrawals are explicitly disabled in paper/safe mode.
-    raise HTTPException(
-        status_code=403,
-        detail={"mode": "safe", "reason": "withdrawals_disabled", "message": "Withdrawals are disabled. This is a paper-only simulator."}
-    )
+# Inline endpoints extracted to route modules:
+# - Config/status → routes/config_v1.py
+# - Exchange/market → routes/exchange_v1.py
+# - Trading/portfolio → routes/trading_v1.py
+# - Reconciliation → routes/reconciliation_v1.py
+# - Audit/traces/metrics → routes/audit_v1.py
+# - Earnings → routes/earnings_v1.py
+# - Analysis/simulation → routes/analysis_v1.py
 
 @app.websocket("/stream")
 async def stream_endpoint(ws: WebSocket):
@@ -1341,17 +880,6 @@ async def websocket_updates_legacy(ws: WebSocket):
 # ---------------------------------------------------------------------------
 # This allows serving the frontend if it's built and placed in 'dist'
 DIST_PATH = os.path.join(os.path.dirname(__file__), "..", "dist")
-
-
-
-@app.get("/surge/status")
-async def surge_status():
-    """Surge scanner status — active alerts, watched symbols, stop-loss counts."""
-    try:
-        from backend.services.surge_scanner.service import get_surge_status
-        return get_surge_status()
-    except Exception as exc:
-        return {"error": str(exc)}
 
 @app.get("/{path:path}")
 async def serve_spa(path: str):
