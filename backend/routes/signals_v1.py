@@ -6,6 +6,8 @@ GET /api/v1/signals/status   — signal service health
 """
 from __future__ import annotations
 
+import time
+
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException
@@ -96,6 +98,38 @@ async def signals_public() -> List[SignalOut]:
 )
 async def signals_status() -> SignalStatusOut:
     return SignalStatusOut(**get_signal_service_status())
+
+
+@router.get("/prediction/{symbol}", summary="Read-only prediction readiness")
+async def prediction_readiness(symbol: str) -> dict:
+    """Project the existing signal cache, never compute or authorize an order."""
+    symbol = symbol.strip().upper()
+    record = get_cached_signal(symbol)
+    now = int(time.time())
+    status = "not_reported"
+    if record is not None:
+        metadata = record.metadata or {}
+        observed = metadata.get("price_observed_at")
+        if record.strategy_id in {"error", "no_data", "insufficient_data"}:
+            status = "unavailable"
+        elif not record.created_at <= now < record.valid_until:
+            status = "expired"
+        elif metadata.get("prediction_input_status") != "validated_observations":
+            status = "unverified"
+        elif type(observed) is not int or not 0 <= now - observed <= 60:
+            status = "expired"
+        else:
+            status = "available"
+    return {
+        "symbol": symbol,
+        "status": status,
+        "signal_id": record.id if record is not None else None,
+        "signal": _to_out(record).model_dump() if status == "available" else None,
+        "source": "python_signal_service_cache",
+        "execution_authorized": False,
+        "provider_mutation_allowed": False,
+        "worker_synchronized": False,
+    }
 
 
 @router.get(

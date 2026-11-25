@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import time
 from typing import Dict, List, Optional
 
@@ -120,20 +121,60 @@ async def _fetch_candles(symbol: str, limit: int = _CANDLE_LIMIT):
     return []
 
 
+def prediction_input_error(symbol, snapshot, candles, now: int) -> Optional[str]:
+    """Validate observed input integrity; not an execution authorization."""
+    try:
+        if snapshot is None or snapshot.symbol != symbol or snapshot.stale is not False:
+            return "price_unavailable_or_stale"
+        if snapshot.market_data_mode not in {"live", "paper_live"}:
+            return "price_mode_unavailable"
+        if snapshot.source not in {"binance", "binance_us_ohlcv", "bitget", "btcc", "coinbase", "coingecko"}:
+            return "price_source_unverified"
+        if not 0 <= now - snapshot.fetched_at <= 60:
+            return "price_observation_expired"
+        price = float(snapshot.price)
+        if not math.isfinite(price) or price <= 0:
+            return "price_invalid"
+        if len(candles) < 30 or len(candles) > _CANDLE_LIMIT:
+            return "candle_history_insufficient_or_oversized"
+        previous = None
+        for candle in candles:
+            ts = candle.time
+            if isinstance(ts, bool) or not isinstance(ts, int) or ts <= 0 or ts > now:
+                return "candle_timestamp_invalid"
+            if previous is not None and ts - previous != 3600:
+                return "candle_sequence_invalid"
+            previous = ts
+            op, hi, lo, cl, vol = map(float, (candle.open, candle.high, candle.low, candle.close, candle.volume))
+            if not all(map(math.isfinite, (op, hi, lo, cl, vol))):
+                return "candle_value_invalid"
+            if lo <= 0 or vol < 0 or not lo <= min(op, cl) <= max(op, cl) <= hi:
+                return "candle_value_invalid"
+        if now - previous > 4200:
+            return "candle_history_stale"
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        return "market_input_invalid"
+    return None
+
+
 async def evaluate_signal(symbol: str, strategy: Optional[str] = None) -> SignalRecord:
     requested_strategy = strategy.strip().lower() if isinstance(strategy, str) and strategy.strip() else None
-    candles = await _fetch_candles(symbol)
-
+    symbol = symbol.strip().upper()
+    snapshot = None
     try:
+        candles = await _fetch_candles(symbol)
         snapshot = await get_price(symbol)
-        current_price = float(snapshot.price)
     except Exception:
-        current_price = 0.0
+        candles = []
 
-    if not candles or current_price <= 0:
+    now = int(time.time())
+    input_error = prediction_input_error(symbol, snapshot, candles, now)
+    current_price = float(snapshot.price) if input_error is None else 0.0
+
+    if input_error is not None:
         import uuid
         now = int(time.time())
-        metadata = {"reason": "no candle data or price unavailable"}
+        metadata = {"reason": input_error, "prediction_input_status": "unavailable"}
         if requested_strategy:
             metadata["requested_strategy"] = requested_strategy
             metadata["strategy_parameter_supported"] = True
@@ -158,8 +199,12 @@ async def evaluate_signal(symbol: str, strategy: Optional[str] = None) -> Signal
         current_price=current_price, signal_ttl_seconds=_TTL_SECONDS,
     )
 
+    record.metadata = dict(record.metadata or {})
+    record.metadata["prediction_input_status"] = "validated_observations"
+    record.metadata["price_observed_at"] = snapshot.fetched_at
+    record.metadata["price_source"] = snapshot.source
+    record.metadata["latest_candle_at"] = candles[-1].time
     if requested_strategy:
-        record.metadata = dict(record.metadata or {})
         record.metadata["requested_strategy"] = requested_strategy
         record.metadata["strategy_parameter_supported"] = True
         record.metadata.setdefault("strategy_engine_note", "core engine used existing combined evaluator")

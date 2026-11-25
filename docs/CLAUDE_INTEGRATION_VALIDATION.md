@@ -14,3 +14,17 @@ Parents: d253f653540fd88eefe3e4bf7cc3658221cdcca4 (PR 286);
 - Worker/provider typechecks, paper safety, CI independence, release lock, migration replay, backend lint and repository audit passed.
 - Python test warnings: Starlette TestClient/httpx deprecation; mock value serialization warning in execution-scope test. Frontend tests emitted React act warnings.
 - No authenticated exchange certification, deployed validation, independent review, or funded execution claimed. Prediction-coordinator integration and cross-runtime reconciliation remain open. Production unchanged. Do not replace PR 286's head or merge without review.
+
+## Prediction readiness increment
+The deployed Python architecture already starts the candle-based signal service;
+the legacy prediction module is not a second production signal authority.
+The existing service now rejects unavailable, stale, non-finite, mismatched,
+duplicated, non-contiguous or insufficient observed market inputs.
+GET /api/v1/signals/prediction/{symbol} projects the same cached signal record
+used by the Python service. Missing, expired and unverified observations are
+explicit states. It neither initiates evaluation nor authorizes execution.
+The response explicitly reports Worker synchronization and provider mutation as
+false. Retrieval time is not exchange event-time proof, and the candle chain
+does not yet carry end-to-end source provenance. Those are separate required
+integration gates. No new execution route or secondary loop was enabled.
+Azure: 10 focused tests, 623 total backend tests passed; backend lint passed.
