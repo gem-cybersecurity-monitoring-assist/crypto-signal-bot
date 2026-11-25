@@ -382,13 +382,14 @@ from backend.routes.config_v1 import router as config_v1_router
 from backend.routes.exchange_v1 import router as exchange_v1_router
 from backend.routes.trading_v1 import router as trading_v1_router
 from backend.routes.reconciliation_v1 import router as reconciliation_v1_router
+from backend.routes.signal import router as signal_router
 
 # Track already registered paths to avoid duplicates
 # NOTE: price_router excluded — app.py defines /price and /exchange/status
 # with synthetic fallback; the routes/price.py router requires a live
 # MarketDataService and would shadow the synthetic-safe defaults.
 _registered_paths = {getattr(route, "path", None) for route in app.routes}
-for _router in (compatibility_router, integrations_router, waitlist_router, kill_switch_router, signals_v1_router, portfolio_v1_router, risk_v1_router, console_v1_router, monitor_v1_router, decisions_v1_router, replay_v1_router, backtest_v1_router, audit_v1_router, earnings_v1_router, analysis_v1_router, config_v1_router, exchange_v1_router, trading_v1_router, reconciliation_v1_router):
+for _router in (compatibility_router, integrations_router, waitlist_router, kill_switch_router, signals_v1_router, portfolio_v1_router, risk_v1_router, console_v1_router, monitor_v1_router, decisions_v1_router, replay_v1_router, backtest_v1_router, audit_v1_router, earnings_v1_router, analysis_v1_router, config_v1_router, exchange_v1_router, trading_v1_router, reconciliation_v1_router, signal_router):
     _router_paths = {getattr(route, "path", None) for route in _router.routes}
     if not _router_paths.issubset(_registered_paths):
         app.include_router(_router)

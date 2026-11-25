@@ -124,12 +124,6 @@ def get_price_api(symbol: str = Query("BTCUSDT")):
     }
 
 
-@router.get("/signal/latest")
-def get_signal_latest_api(symbol: str | None = Query(None)):
-    from backend.logic.market_state import get_signal_latest
-    return get_signal_latest(symbol)
-
-
 @router.post("/market-state")
 def market_state_api(req: MarketStateRequest, _: None = Depends(require_auth)):
     result = build_market_state_result(

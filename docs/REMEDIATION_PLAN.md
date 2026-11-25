@@ -26,18 +26,24 @@ The following has already been delivered across PRs #75–#81 and the current cl
 
 Goal: Align backend module layout with CLAUDE.md target architecture.
 
-### 1.1 Split `app.py` monolith — IN PROGRESS
-**Problem**: `app.py` is ~1,400 lines with ~40 inline endpoints.
-**Action**: Extract inline endpoints into existing route modules. `app.py` should contain only FastAPI app creation, lifespan, middleware, and router mounting.
-**Files**: `backend/app.py` → distribute to `backend/routes/`
-**Risk**: High — most endpoints live here. Must preserve all API contracts.
-**Tests**: Run full `test_api.py` (112 tests) after each extraction batch.
+### 1.1 Split `app.py` monolith — DONE
+**Problem**: `app.py` was ~1,400 lines with ~40 inline endpoints.
+**Action**: Extract inline endpoints into route modules via `backend/app_state.py` lazy accessor pattern.
+**Files**: `backend/app.py` → distributed to `backend/routes/`
 **Progress**:
 - [x] Created `backend/dependencies.py` with shared `require_auth` (sys.modules approach avoids import cycles)
 - [x] Extracted audit/traces/metrics → `backend/routes/audit_v1.py`
 - [x] Extracted earnings endpoints → `backend/routes/earnings_v1.py`
 - [x] Extracted analysis/simulation → `backend/routes/analysis_v1.py`
-- [ ] Remaining ~30 endpoints need DI refactor for module-level state before extraction
+- [x] Extracted config/status → `backend/routes/config_v1.py`
+- [x] Extracted exchange/market feed → `backend/routes/exchange_v1.py`
+- [x] Extracted trading/portfolio/price → `backend/routes/trading_v1.py`
+- [x] Extracted reconciliation → `backend/routes/reconciliation_v1.py`
+- [x] Created `backend/app_state.py` lazy accessor to avoid circular imports
+- [x] Moved `ExchangeAPIError` to `backend/exceptions.py` to break import cycle
+- [x] Fixed pre-existing test isolation bug (render_entrypoint replacing /health routes)
+- [x] Remaining endpoints (health, websocket, catch-all) correctly stay in app.py
+**Tests**: All 459+ backend tests pass, import cycle detector clean.
 
 ### 1.2 Consolidate risk modules — PARTIAL
 **Problem**: Risk logic scattered across `logic/risk.py`, `engine/risk_rules.py`, `services/risk_gate/service.py`.
@@ -151,9 +157,10 @@ Goal: Align backend module layout with CLAUDE.md target architecture.
 
 ## Phase 5: Engine & Integration (Priority: MEDIUM)
 
-### 5.1 Wire prediction bot
-**Problem**: `services/prediction_bot/` exists but is not integrated into the engine pipeline.
-**Action**: Wire into the coordinator's signal evaluation step.
+### 5.1 Wire prediction bot — DONE
+**Problem**: `services/prediction_bot/` existed but `/signal/latest` was backed by simple market_state cache.
+**Action**: Replaced market_state-cached `/signal/latest` with prediction service-backed endpoint from `routes/signal.py`. Added `side` field for backward compat, `message` for unavailable state. Frontend normalizer updated to prefer `direction` over `side`. 6 new tests.
+**Tests**: `test_signal_endpoint.py` (6 tests), `test_api.py` updated.
 
 ### 5.2 Document Worker/Python boundary — DONE
 **Problem**: Both layers have signal/risk/execution logic. The boundary is unclear.
