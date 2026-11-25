@@ -84,9 +84,13 @@ Error responses: `404` (symbol not tracked), `503` (market data unavailable).
 
 #### `GET /signal/latest` response
 
-The Python compatibility route returns a flat response, not a nested `signal`
-object. The legacy prediction service is separate from the running candle
-service; its availability does not establish shared execution authority.
+The Python compatibility route returns a flat read-only projection of the same
+validated candle cache as `/api/v1/signals/prediction/{symbol}`. It does not
+invoke the legacy prediction stub or compute on read. `signal_id`,
+`readiness_status`, and `valid_until` distinguish observation state and TTL.
+Confidence is expressed as percent. Regime and forecast horizon remain unknown;
+the existing Worker-only forecast UI excludes these Python research observations
+rather than inventing classifications.
 
 ```json
 {
@@ -94,19 +98,27 @@ service; its availability does not establish shared execution authority.
   "direction": "NEUTRAL",
   "side": "NEUTRAL",
   "confidence": 0.0,
-  "regime": "CHAOS",
+  "regime": "UNKNOWN",
   "horizon": 0,
   "available": false,
   "source": "unavailable",
   "computed_at": 0,
   "reasoning": null,
-  "message": "Signal unavailable"
+  "message": "Signal observation not_reported",
+  "signal_id": null,
+  "valid_until": null,
+  "readiness_status": "not_reported",
+  "confidence_scale": "percent",
+  "execution_authorized": false,
+  "worker_synchronized": false,
+  "forecast_horizon_verified": false,
+  "regime_verified": false
 }
 ```
 
-Use the versioned prediction-readiness endpoint for source-attributed candle
-observations. The Worker has its own distinct signal contract. Unifying
-these read models remains an explicit integration task.
+Both Python routes share observation classification. The Worker still has
+its own distinct signal contract; authenticated cross-runtime synchronization
+and unified authority remain integration tasks.
 
 ### Portfolio & Trading
 

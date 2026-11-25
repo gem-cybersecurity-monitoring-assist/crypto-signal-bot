@@ -2,6 +2,7 @@ import type { Signal } from '../types/crypto';
 
 export interface WorkerSignalResponse {
   symbol?: string;
+  source?: string;
   direction?: string;
   side?: string;
   confidence: number;
@@ -11,11 +12,16 @@ export interface WorkerSignalResponse {
   available?: boolean;
 }
 
+/** Python candle observations are not complete Worker forecast contracts. */
+export function isResearchOnlySignal(data: { source?: string }): boolean {
+  return data.source === 'python_signal_service_cache';
+}
+
 export function normalizeWorkerSignal(
   data: WorkerSignalResponse,
   expectedBackendSymbol: string,
 ): Signal | null {
-  if (data.available === false) return null;
+  if (data.available === false || isResearchOnlySignal(data)) return null;
 
   const responseSymbol = String(data.symbol ?? '').toUpperCase().replace(/(USDT|USD)$/i, '');
   if (responseSymbol && responseSymbol !== expectedBackendSymbol) return null;

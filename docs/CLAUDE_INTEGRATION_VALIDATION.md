@@ -186,3 +186,21 @@ including four new lifecycle tests; lint and architecture audit passed.
 Two pre-existing test warnings remain. Previous candidate 38e6ec57 passed
 Worker CI 45710182891. Concurrent lifecycle races, cancelled or interrupted
 transactions, durable accounting and restart reconciliation remain open.
+
+## Shared Python signal read-model increment
+The legacy GET /signal/latest and versioned prediction-readiness endpoint
+now read one analytical candle cache through a common observation classifier.
+The legacy route no longer invokes the disconnected prediction stub or
+recomputes on GET. Both agree on signal identity, freshness and unavailable
+states; malformed confidence/symbol evidence is unverified. No forecast
+regime or forecast horizon is inferred from cache TTL. The canonical Worker
+forecast display and AI insights exclude Python-only research observations
+until a compatible, synchronized contract is verified.
+Azure: 729 backend tests, 62 focused prediction/API tests (overlap), 98
+frontend tests, full application typecheck, production build, performance
+budget, operator frontend safety, CI policy, lint and architecture audit
+passed. Existing test warnings remain. The legacy prediction module's
+direct unit tests are retained; it is not the current API read authority.
+This unifies Python reads only, not Python/Worker state authority, forecast
+classification, or authenticated exchange data. No trading dispatch,
+provider mutation, production deployment, or financial lock changes.

@@ -3,6 +3,7 @@ import { CryptoPrice } from '@/types/crypto';
 import { toast } from 'sonner';
 import { getConfiguredBackendUrl } from '@/lib/env';
 import { PAPER_DASHBOARD_ROUTES } from '@/lib/paperDashboardRoutes';
+import { isResearchOnlySignal } from '@/lib/paperSignal';
 
 const BACKEND_URL = getConfiguredBackendUrl();
 
@@ -22,6 +23,7 @@ interface SignalResponse {
   entry_price?: number | null; stop_loss?: number | null; take_profit?: number | null;
   confidence: number; strategy_id?: string; strategy?: string;
   available?: boolean;
+  source?: string;
   metadata?: SignalMetadata;
 }
 
@@ -153,7 +155,7 @@ export function useAIInsights() {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
       const signalData: SignalResponse = await res.json();
-      if (signalData.available === false) throw new Error('Signal unavailable');
+      if (signalData.available === false || isResearchOnlySignal(signalData)) throw new Error('Signal unavailable');
       setInsight(buildInsight(signalData, priceData));
     } catch (err) {
       const name = err instanceof Error ? err.name : '';

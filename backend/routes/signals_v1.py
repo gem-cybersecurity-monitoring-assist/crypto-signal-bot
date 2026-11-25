@@ -6,8 +6,6 @@ GET /api/v1/signals/status   — signal service health
 """
 from __future__ import annotations
 
-import time
-
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException
@@ -19,6 +17,8 @@ from backend.services.signal_service.service import (
     get_signal_service_status,
     evaluate_signal,
 )
+
+from backend.services.signal_service.observation import read_observation
 
 router = APIRouter(prefix="/api/v1/signals", tags=["signals_v1"])
 
@@ -104,36 +104,7 @@ async def signals_status() -> SignalStatusOut:
 async def prediction_readiness(symbol: str) -> dict:
     """Project the existing signal cache, never compute or authorize an order."""
     symbol = symbol.strip().upper()
-    record = get_cached_signal(symbol)
-    now = int(time.time())
-    status = "not_reported"
-    provider_clock_status = "not_reported"
-    provider_clock_kind = None
-    provider_clock_ms = None
-    if record is not None:
-        metadata = record.metadata or {}
-        observed = metadata.get("price_observed_at")
-        stamp = metadata.get("provider_timestamp_ms")
-        kind = metadata.get("provider_timestamp_kind")
-        if metadata.get("price_source") == "bitget" and kind == "bitget_ticker_current_time" and type(stamp) is int:
-            provider_clock_kind = kind
-            provider_clock_ms = stamp
-            age_ms = now * 1000 - stamp
-            provider_clock_status = "current" if -999 <= age_ms <= 60000 else "outside_window"
-        if record.strategy_id in {"error", "no_data", "insufficient_data"}:
-            status = "unavailable"
-        elif not record.created_at <= now < record.valid_until:
-            status = "expired"
-        elif metadata.get("prediction_input_status") != "validated_observations":
-            status = "unverified"
-        elif type(observed) is not int or not 0 <= now - observed <= 60:
-            status = "expired"
-        elif metadata.get("candle_provenance") != "adapter_attributed_batch":
-            status = "unverified"
-        elif type(metadata.get("candle_observed_at")) is not int or not 0 <= now - metadata["candle_observed_at"] <= 75:
-            status = "expired"
-        else:
-            status = "available"
+    record, status, clock = read_observation(symbol)
     return {
         "symbol": symbol,
         "status": status,
@@ -143,12 +114,7 @@ async def prediction_readiness(symbol: str) -> dict:
         "execution_authorized": False,
         "provider_mutation_allowed": False,
         "worker_synchronized": False,
-        "provider_clock": {
-            "status": provider_clock_status,
-            "kind": provider_clock_kind,
-            "timestamp_ms": provider_clock_ms,
-            "trade_event_time_verified": False,
-        },
+        "provider_clock": clock,
     }
 
 

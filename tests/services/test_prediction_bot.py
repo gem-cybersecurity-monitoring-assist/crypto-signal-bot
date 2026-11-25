@@ -323,29 +323,30 @@ class TestMarketDataUnavailableForSignal:
 class TestSignalRoute:
     @pytest.mark.asyncio
     async def test_signal_route_returns_correct_shape(self, client: AsyncClient):
-        mock_sig = SignalOutput(
-            symbol="BTCUSDT", direction="UP", confidence=72.0,
-            regime="TREND", horizon=15, available=True,
-            source="signal_engine", computed_at=int(time.time()),
-            reasoning="test",
+        from backend.logic.signal_engine import SignalRecord
+        from backend.services.signal_service import service as svc
+        now = int(time.time())
+        record = SignalRecord(
+            "research-id", "BTCUSDT", "1h", "BUY", 100.0, None, None,
+            0.72, "combined", now, now + 900,
+            {"prediction_input_status": "validated_observations", "price_observed_at": now,
+             "candle_provenance": "adapter_attributed_batch", "candle_observed_at": now},
         )
-
-        with patch("backend.routes.signal.get_latest_signal",
-                   new=AsyncMock(return_value=mock_sig)):
+        with patch.object(svc, "_signal_cache", {"BTCUSDT": record}):
             resp = await client.get("/signal/latest?symbol=BTCUSDT")
-
         assert resp.status_code == 200
         data = resp.json()
         for field in ["symbol", "direction", "confidence", "regime",
                       "horizon", "available", "source", "computed_at"]:
             assert field in data, f"Missing field: {field}"
+        assert data["signal_id"] == "research-id"
+        assert data["available"] is True
+        assert data["confidence"] == pytest.approx(72.0)
 
     @pytest.mark.asyncio
     async def test_unavailable_signal_available_false_not_404(self, client: AsyncClient):
-        """Unavailable signal returns 200 with available=False — not 404 or 503."""
-        with patch("backend.routes.signal.get_latest_signal",
-                   new=AsyncMock(return_value=UNAVAILABLE_SIGNAL)):
+        from backend.services.signal_service import service as svc
+        with patch.object(svc, "_signal_cache", {}):
             resp = await client.get("/signal/latest?symbol=SOLUSDT")
-
         assert resp.status_code == 200
         assert resp.json()["available"] is False

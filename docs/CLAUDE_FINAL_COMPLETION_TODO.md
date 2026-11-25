@@ -194,3 +194,15 @@ Worker: https://crypto-signal-bot-api.analyzer-d94.workers.dev
   task completion is not proof of database commit or atomic reconciliation.
 - [ ] Continue authoritative signal/Guardian/ledger integration and external
   certification/review gates; do not enable competing automatic execution.
+
+## Shared signal read-model checkpoint
+- [x] Replace legacy Python signal endpoint stub read with common validated
+  candle observation classifier, align readiness and status, and prevent
+  incomplete research observations from being represented as Worker forecasts.
+- [x] Verify 729 backend, 62 focused API/prediction (overlap), 98 frontend,
+  full app typecheck, build, performance and static release checks.
+- [ ] Finish authenticated cross-runtime signal sequence/identity, event-time
+  evidence, unified Guardian and authoritative ledger reconciliation.
+- [ ] Review remaining legacy prediction code and skipped end-to-end check
+  against the new actual read contract; do not wire a second engine merely
+  to satisfy obsolete assertions. Complete external provider and release gates.
