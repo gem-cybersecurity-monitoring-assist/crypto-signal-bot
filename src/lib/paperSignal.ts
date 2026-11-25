@@ -34,8 +34,11 @@ export function normalizeWorkerSignal(
     ? Math.round(Math.max(0, Math.min(100, rawConfidence <= 1 ? rawConfidence * 100 : rawConfidence)))
     : 0;
 
-  const regime = typeof data.regime === 'string' && data.regime.length > 0
-    ? data.regime
+  type Regime = Signal['regime'];
+  const VALID_REGIMES: Regime[] = ['TREND', 'RANGE', 'CHAOS'];
+  const rawRegime = String(data.regime ?? '').toUpperCase() as Regime;
+  const regime: Regime = VALID_REGIMES.includes(rawRegime)
+    ? rawRegime
     : (confidencePct >= 65 ? 'TREND' : 'RANGE');
   const horizon = typeof data.horizon === 'number' && data.horizon > 0
     ? data.horizon
