@@ -231,3 +231,27 @@ PRs #286/#295. Designated certification Secrets Store list returned zero
 entries; the three named Bitget certification entries were not present.
 This does not establish absence in all secret stores. No secret values
 read, no authenticated provider certification, no production mutation.
+
+## Authenticated cross-runtime signal history observation
+Added dedicated Worker GET /v2/signals/observation?symbol=BTC with a fixed,
+bound SELECT of one persisted signal row, after canonical rate admission
+and before the legacy schema initialization path. It never calls price or
+order routes. Admission retains its existing counter write. The new
+SIGNAL_OBSERVATION_READ_KEY binding is exclusively for this read route;
+no general backend/operator key is forwarded by Python. Missing or wrong
+dedicated credentials fail closed. Row identity, symbol, UTC timestamp,
+timeframe, side and confidence are validated. Persisted rows are historical,
+not provider events, and do not establish executable freshness or sequence.
+Python operator-only GET /api/v1/monitor/signal-comparison/{symbol} reads
+local validated observations and the fixed HTTPS Worker endpoint using
+bounded response size/time, no redirects or proxy environment. Independent
+namespaces are explicit; shared event, sequence, synchronization and
+execution authorization are not claimed. No competing state writer.
+Azure full backend 753 passed, 13 new Python tests; Worker contracts 77
+passed (16 additional cases), Worker build, paper-safety, CI independence,
+production target checks, backend lint and architecture audit passed.
+Prior CI 45720083432 succeeded. Production attestation remains healthy.
+The new key is not configured in production by this increment; deployment,
+secure provisioning of a dedicated least-privilege key on both server
+runtimes, and authenticated end-to-end verification remain required.
+No secret values read or written, no production deployment.

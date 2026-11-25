@@ -19,11 +19,19 @@ describe('canonical Worker admission wiring', () => {
     delegate.scheduled.mockResolvedValue(undefined)
   })
 
-  it.each(['/agent/context', '/v2/infrastructure/status', '/intent/paper', '/ws/updates', '/health'])('rejects %s before any inner route on D1 failure', async (path) => {
+  it.each(['/agent/context', '/v2/infrastructure/status', '/v2/signals/observation', '/intent/paper', '/ws/updates', '/health'])('rejects %s before any inner route on D1 failure', async (path) => {
     const response = await worker.fetch(new Request(`https://worker.example${path}`), environment(null, true), {} as ExecutionContext)
     expect(response.status).toBe(503)
     expect(delegate.fetch).not.toHaveBeenCalled()
     expect(await response.text()).not.toContain('private')
+  })
+
+  it('routes admitted signal observations before legacy schema initialization', async () => {
+    const env = environment(1)
+    const response = await worker.fetch(new Request('https://worker.example/v2/signals/observation?symbol=BTC'), env, {} as ExecutionContext)
+    expect(response.status).toBe(401)
+    expect(delegate.fetch).not.toHaveBeenCalled()
+    expect(env.DB.prepare).toHaveBeenCalledOnce()
   })
 
   it('does not delegate a rejected concurrent quota claim', async () => {

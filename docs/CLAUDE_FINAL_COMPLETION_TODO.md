@@ -221,3 +221,15 @@ Worker: https://crypto-signal-bot-api.analyzer-d94.workers.dev
   Python–Worker shared event identity/sequence; current diagnostic storage
   and Guardian observation are not authority migration. Distinguish missing
   historical DB report from inaccessible storage on restart.
+
+## Cross-runtime signal history observation increment
+- [x] Implement dedicated authenticated Worker historical-signal observation
+  and operator-only Python comparison, preserving canonical request admission.
+- [x] Verify 753 backend and 77 Worker contract tests, build and static
+  release gates; previous Worker CI 45720083432 passed.
+- [ ] Deploy through approved release, securely configure matching dedicated
+  SIGNAL_OBSERVATION_READ_KEY bindings (never reuse a privileged operator
+  key; no browser exposure), and verify authenticated end-to-end read.
+- [ ] Establish authoritative shared market event identity and sequence,
+  unified Guardian and atomic ledger reconciliation. The new historical
+  observation contract deliberately does not assert any of these.

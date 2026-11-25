@@ -1,3 +1,4 @@
+import { handleSignalObservation, SIGNAL_OBSERVATION_PATH, type SignalObservationEnv } from './routes/signal-observation'
 import worker from './index_agent_context'
 import type { AgentContextEnv } from './agent-context'
 import { consumeScheduledRecoveryReads, type ScheduledRecoveryReadEnv } from './live/scheduled-recovery-read'
@@ -11,7 +12,7 @@ import {
 export default {
   async fetch(
     request: Request,
-    env: AgentContextEnv,
+    env: AgentContextEnv & SignalObservationEnv,
     ctx: ExecutionContext,
   ): Promise<Response> {
     const admission = await evaluateRequestAdmission(request, env)
@@ -19,6 +20,10 @@ export default {
       return requestAdmissionFailureResponse(request, env, admission)
     }
 
+    // Inspect persisted history after admission, before legacy schema/bootstrap writes.
+    if (new URL(request.url).pathname === SIGNAL_OBSERVATION_PATH) {
+      return handleSignalObservation(request, env)
+    }
     return worker.fetch(request, env, ctx)
   },
 
