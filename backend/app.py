@@ -269,6 +269,11 @@ async def lifespan(application):
                 await stop_service()
             except Exception:
                 logger.warning("Background service shutdown failed: %s", stop_service.__name__)
+        try:
+            from backend.services.portfolio.service import stop_portfolio_service
+            await stop_portfolio_service()
+        except Exception:
+            logger.warning("Portfolio shutdown incomplete; persistence completeness unverified.")
         # Persist portfolio before shutdown
         try:
             await persist_portfolio(paper_portfolio, mode=TRADING_MODE)

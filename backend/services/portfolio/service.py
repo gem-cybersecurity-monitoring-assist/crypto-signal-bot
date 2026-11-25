@@ -24,7 +24,7 @@ import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
 from decimal import Decimal, ROUND_HALF_UP
-from typing import Dict, List, Optional, Tuple
+from typing import Coroutine, Dict, List, Optional, Tuple
 
 from backend.services.market_data.service import get_price
 
@@ -112,6 +112,37 @@ _orders:        Dict[str, OrderState]  = {}
 _trades:        List[TradeState]       = []
 _trade_counter: int = 0
 _peak_equity:   Decimal = STARTING_CASH
+_portfolio_tasks: set[asyncio.Task] = set()
+_persistence_tasks: set[asyncio.Task] = set()
+_portfolio_stop: Optional[asyncio.Event] = None
+_portfolio_starting = False
+_SHUTDOWN_TIMEOUT = 15.0
+
+
+def _schedule_persistence(coro: Coroutine) -> None:
+    """Retain existing asynchronous writes until their completion."""
+    task = asyncio.create_task(coro, name="portfolio_persistence")
+    _persistence_tasks.add(task)
+
+    def completed(done: asyncio.Task) -> None:
+        _persistence_tasks.discard(done)
+        if not done.cancelled() and done.exception() is not None:
+            log.warning("[portfolio] asynchronous persistence failed")
+
+    task.add_done_callback(completed)
+
+
+async def _next_tick(interval: float) -> bool:
+    """Wake sleeping loops immediately on shutdown, finish the current tick."""
+    stop = _portfolio_stop
+    if stop is None:
+        return False
+    try:
+        await asyncio.wait_for(stop.wait(), timeout=interval)
+        return False
+    except asyncio.TimeoutError:
+        return not stop.is_set()
+
 
 
 def reset_portfolio(starting_cash: Decimal = STARTING_CASH) -> None:
@@ -298,7 +329,7 @@ async def _fill_order(order: OrderState) -> None:
             symbol=order.symbol, qty=order.qty,
             entry_price=fill_price, opened_at=now, order_id=order.id,
         ))
-        asyncio.create_task(_upsert_position(order.symbol, order.account_id))
+        _schedule_persistence(_upsert_position(order.symbol, order.account_id))
 
     elif order.side == "SELL":
         # Check we have enough long exposure
@@ -311,7 +342,7 @@ async def _fill_order(order: OrderState) -> None:
         _, realized_pnl = _fifo_close(order.symbol, fill_qty, fill_price)
         proceeds = fill_qty * fill_price - fee
         _cash += proceeds.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-        asyncio.create_task(_upsert_position(order.symbol, order.account_id))
+        _schedule_persistence(_upsert_position(order.symbol, order.account_id))
 
     order.status    = "FILLED"
     order.updated_at = now
@@ -471,8 +502,7 @@ def get_order(order_id: str) -> Optional[dict]:
 # ─────────────────────────────────────────────────────────────────
 
 async def _snapshot_loop() -> None:
-    while True:
-        await asyncio.sleep(_SNAPSHOT_INTERVAL)
+    while await _next_tick(_SNAPSHOT_INTERVAL):
         try:
             equity = await _compute_equity()
             drawdown = float((_peak_equity - equity) / _peak_equity * 100) if _peak_equity > 0 else 0.0
@@ -498,8 +528,7 @@ async def _snapshot_loop() -> None:
 
 async def _limit_fill_loop() -> None:
     """Check pending LIMIT orders every 10s and fill if price has crossed."""
-    while True:
-        await asyncio.sleep(10)
+    while await _next_tick(10):
         pending = [o for o in _orders.values() if o.status == "PENDING" and o.order_type == "LIMIT"]
         for order in pending:
             try:
@@ -583,12 +612,51 @@ async def _persist_snapshot(snap: EquitySnapshot) -> None:
 # ─────────────────────────────────────────────────────────────────
 
 async def start_portfolio_service(app) -> None:
-    """Startup: restore DB state then launch background loops."""
-    # Restore portfolio state from DB before any trading activity
-    await restore_portfolio_state()
-    # Launch background loops
-    asyncio.create_task(_snapshot_loop())
-    asyncio.create_task(_limit_fill_loop())
+    """Restore once and own the existing paper portfolio background loops."""
+    global _portfolio_stop, _portfolio_starting
+    if _portfolio_starting or any(not task.done() for task in _portfolio_tasks):
+        return
+    _portfolio_starting = True
+    try:
+        await restore_portfolio_state()
+        _portfolio_stop = asyncio.Event()
+        _portfolio_tasks.clear()
+        _portfolio_tasks.update((
+            asyncio.create_task(_snapshot_loop(), name="portfolio_snapshot"),
+            asyncio.create_task(_limit_fill_loop(), name="portfolio_limit_fill"),
+        ))
+    finally:
+        _portfolio_starting = False
+
+
+async def stop_portfolio_service() -> None:
+    """Drain existing loop work and queued writes before database disposal."""
+    global _portfolio_stop
+    if _portfolio_starting:
+        raise RuntimeError("Portfolio startup is still in progress")
+    if _portfolio_stop is not None:
+        _portfolio_stop.set()
+    timed_out = False
+    if _portfolio_tasks:
+        done, pending = await asyncio.wait(tuple(_portfolio_tasks), timeout=_SHUTDOWN_TIMEOUT)
+        timed_out = bool(pending)
+        for task in pending:
+            task.cancel()
+        results = await asyncio.gather(*_portfolio_tasks, return_exceptions=True)
+        if any(isinstance(result, Exception) for result in results):
+            log.warning("[portfolio] background loop failed during shutdown")
+        _portfolio_tasks.clear()
+    if _persistence_tasks:
+        pending_writes = tuple(_persistence_tasks)
+        _, pending = await asyncio.wait(pending_writes, timeout=_SHUTDOWN_TIMEOUT)
+        timed_out = timed_out or bool(pending)
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending_writes, return_exceptions=True)
+        _persistence_tasks.difference_update(pending_writes)
+    _portfolio_stop = None
+    if timed_out:
+        raise RuntimeError("Portfolio shutdown timed out; persistence completeness unverified")
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -841,7 +909,7 @@ def cancel_pending_order(order_id: str) -> bool:
     try:
         loop = _asyncio.get_event_loop()
         if loop.is_running():
-            _asyncio.ensure_future(_persist_order(order))
+            _schedule_persistence(_persist_order(order))
     except Exception:
         pass
     return True

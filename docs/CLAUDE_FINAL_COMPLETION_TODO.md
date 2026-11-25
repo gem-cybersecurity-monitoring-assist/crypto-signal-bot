@@ -184,3 +184,13 @@ Worker: https://crypto-signal-bot-api.analyzer-d94.workers.dev
 - [ ] Complete portfolio loop/persistence task ownership and concurrent
   lifecycle verification; legacy executor activation remains out of scope
   until authoritative state integration and reviewed release acceptance.
+
+## Portfolio task ownership increment
+- [x] Track existing portfolio snapshot/fill loops and queued persistence
+  tasks; drain on shutdown with explicit timeout reporting.
+- [x] Verify repeat startup, restore failure, write draining and timeout:
+  724 backend and 49 focused tests passed (overlap).
+- [ ] Verify concurrent lifecycle and durable transaction/restart accounting;
+  task completion is not proof of database commit or atomic reconciliation.
+- [ ] Continue authoritative signal/Guardian/ledger integration and external
+  certification/review gates; do not enable competing automatic execution.

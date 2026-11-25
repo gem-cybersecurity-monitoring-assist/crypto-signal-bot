@@ -170,3 +170,19 @@ Prior published checkpoint d48d8e11 passed Worker CI 45709367226.
 Remaining: portfolio snapshot/fill-task and persistence lifecycle, concurrent
 startup/shutdown race analysis, legacy executor signature mismatch (do not
 silently activate), and cross-runtime state/authority/release gates.
+
+## Portfolio task ownership increment (2026-11-25)
+Existing paper portfolio snapshot and limit-fill loops now retain handles,
+prevent duplicate sequential startup and wake on a stop event. Shutdown
+drains current loop work, tracks pre-existing asynchronous position/order
+writes, and waits for them before database disposal. A bounded wait reports
+incomplete persistence on timeout and cancels overdue tasks. App lifespan
+calls the portfolio shutdown routine before database close. This is task
+ownership and graceful shutdown, not atomic ledger reconciliation or
+proof that best-effort writes committed. No change to execution authorization,
+order sizing, fills, provider mutations or trading mode.
+Azure: 724 backend tests, 49 focused portfolio/console tests (overlap),
+including four new lifecycle tests; lint and architecture audit passed.
+Two pre-existing test warnings remain. Previous candidate 38e6ec57 passed
+Worker CI 45710182891. Concurrent lifecycle races, cancelled or interrupted
+transactions, durable accounting and restart reconciliation remain open.
