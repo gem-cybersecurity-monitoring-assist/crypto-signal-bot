@@ -36,9 +36,16 @@ src/
 │   ├── Portfolio.tsx            # Dedicated portfolio view
 │   ├── PrivacyPolicy.tsx        # Privacy policy
 │   ├── ProductionStatus.tsx     # Production status page
+│   ├── Health.tsx               # Standalone system health view
+│   ├── Audit.tsx                # Standalone audit trail view
 │   ├── Settings.tsx             # User settings
 │   ├── Waitlist.tsx             # Waitlist signup form
-│   └── NotFound.tsx             # 404 page
+│   ├── NotFound.tsx             # 404 page
+│   └── __tests__/              # Component tests
+│       ├── Health.test.tsx      # 12 tests
+│       ├── Audit.test.tsx       # 13 tests
+│       ├── Settings.test.tsx    # 8 tests
+│       └── Portfolio.test.tsx   # 9 tests
 │
 ├── components/
 │   ├── dashboard/               # Dashboard panel components
@@ -158,6 +165,8 @@ src/
 | `/dashboard` | `Index` (Dashboard) | Auth (graceful on role/auth failure) |
 | `/backtest` | `Backtest` | Auth + role |
 | `/portfolio` | `Portfolio` | Auth + role |
+| `/health` | `Health` | Auth + role |
+| `/audit` | `Audit` | Auth + role |
 | `/settings` | `Settings` | Auth + role |
 | `/account` | `Account` | Auth (no role required) |
 | `/integrations` | `IntegrationsStatus` | Auth + role |
@@ -169,12 +178,12 @@ src/
 
 ## Removed Pages (Stub Cleanup)
 
-The following stub pages were deleted as part of the remediation:
+The following stub pages were deleted and later rebuilt as full standalone pages:
 
-- `Audit.tsx` — dashboard panel covers this
-- `Positions.tsx` — superseded by `PortfolioPanel` and `/portfolio`
-- `Guardian.tsx` — dashboard panel covers this
-- `Health.tsx` — dashboard panel covers this
+- `Audit.tsx` — rebuilt with tabbed intents/orders/risk events views
+- `Positions.tsx` — superseded by `Portfolio.tsx` with live prices
+- `Guardian.tsx` — covered by Guardian section in `Health.tsx`
+- `Health.tsx` — rebuilt with backend service, guardian, market data, and monitoring probe sections
 
 ## Data Flow
 
@@ -210,4 +219,19 @@ npm run dev          # Start dev server (port 8080)
 npm run build        # Production build
 npm run lint         # ESLint check
 npm run preview      # Preview production build
+npx vitest run       # Run all frontend tests (97 tests)
+npx vitest run src/pages/__tests__/  # Run component tests only
 ```
+
+## Testing
+
+| Library | Purpose |
+|---------|---------|
+| Vitest 5 | Test runner (jsdom environment) |
+| @testing-library/react | Component rendering and queries |
+| @testing-library/jest-dom | Custom DOM matchers |
+| vite-tsconfig-paths | `@/` alias resolution in tests |
+
+**Config**: `vitest.config.ts` (separate from `vite.config.ts`). Uses jsdom environment with `src/test/setup.ts` for jest-dom matchers and ResizeObserver polyfill. Tests that read source files via `readFile` use `// @vitest-environment node` annotation.
+
+**Test structure**: Component tests live beside their pages in `src/pages/__tests__/`. Contract tests live in `src/tests/`. The `src/test/` directory holds shared test utilities (`setup.ts`, `render.tsx`).
