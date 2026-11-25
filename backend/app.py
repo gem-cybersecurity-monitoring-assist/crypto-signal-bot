@@ -584,7 +584,34 @@ def _capture_signal_snapshot(symbol: str) -> SignalSnapshot:
 # ---------------------------------------------------------------------------
 # Intent Processing
 # ---------------------------------------------------------------------------
+
+_IDEMPOTENCY_CACHE: dict[str, str] = {}
+_IDEMPOTENCY_CACHE_MAX = 10_000
+
+def _check_idempotency(key: str | None) -> str | None:
+    """Return the intent ID of a previous execution if this key was already processed."""
+    if key is None:
+        return None
+    return _IDEMPOTENCY_CACHE.get(key)
+
+def _record_idempotency(key: str | None, intent_id: str) -> None:
+    if key is None:
+        return
+    if len(_IDEMPOTENCY_CACHE) >= _IDEMPOTENCY_CACHE_MAX:
+        oldest = next(iter(_IDEMPOTENCY_CACHE))
+        del _IDEMPOTENCY_CACHE[oldest]
+    _IDEMPOTENCY_CACHE[key] = intent_id
+
+
 def _process_intent(req: IntentRequest, mode: str) -> IntentResponse:
+    previous_id = _check_idempotency(req.idempotency_key)
+    if previous_id is not None:
+        return IntentResponse(
+            id=previous_id,
+            status="DUPLICATE_REJECTED",
+            notes=f"Duplicate intent rejected: idempotency_key already processed (original={previous_id})",
+        )
+
     intent = ExecutionIntent(
         symbol=req.symbol.upper(),
         side=req.side,
@@ -595,6 +622,7 @@ def _process_intent(req: IntentRequest, mode: str) -> IntentResponse:
         mode=mode,
         strategy_id=req.strategy_id,
         venue_id=req.venue_id or EXCHANGE,
+        idempotency_key=req.idempotency_key,
     )
 
     # Initialize decision trace
@@ -642,6 +670,7 @@ def _process_intent(req: IntentRequest, mode: str) -> IntentResponse:
         raise
     finally:
         _finalize_trace()
+        _record_idempotency(req.idempotency_key, intent.id)
 
 
 def _process_intent_inner(
