@@ -12,8 +12,7 @@ Every EXECUTOR_INTERVAL seconds the loop:
   4. If the signal returns to FLAT, close any open position.
 
 Changes (NAV anchor + Telegram alerts):
-  - On cold start, anchor guardian NAV to current portfolio equity so a
-    pre-existing paper loss does not immediately re-trigger the kill switch.
+  - On cold start, preserve the existing Guardian state and drawdown.
   - On every fill (open/close), fire Telegram trade alert to GEM channel.
 """
 from __future__ import annotations
@@ -41,7 +40,8 @@ _last_acted: Dict[str, tuple] = {}
 _running:    bool = False
 _run_count:  int  = 0
 _last_run_at: int = 0
-_nav_anchored: bool = False   # NAV anchor flag — set once on first run
+_nav_anchored: bool = False   # Legacy status field: no automatic NAV reset
+_startup_observed: bool = False
 
 
 def get_executor_status() -> dict:
@@ -54,6 +54,7 @@ def get_executor_status() -> dict:
         "position_pct":      POSITION_PCT,
         "max_positions":     MAX_POSITIONS,
         "nav_anchored":      _nav_anchored,
+        "startup_observed":  _startup_observed,
         "last_acted":        {s: {"side": v[0], "strategy_id": v[1]}
                               for s, v in _last_acted.items()},
     }
@@ -91,31 +92,11 @@ async def _count_open_positions() -> int:
 
 
 async def _anchor_nav_on_start() -> None:
-    """
-    On cold start, anchor the guardian's peak equity to the current portfolio
-    equity so a pre-existing paper drawdown does not immediately re-trigger
-    the kill switch when the executor resumes.
-    """
-    global _nav_anchored
-    if _nav_anchored:
-        return
-    try:
-        equity = await _get_equity()
-        from backend.services.guardian_bot import service as guardian
-        # Reset guardian counters and re-anchor drawdown baseline to current equity
-        await guardian.reset_kill_switch()
-        # Force peak equity to current equity so drawdown starts from here
-        guardian._drawdown_pct = 0.0
-        log.info("[executor] NAV anchored to current equity $%.2f on cold start", equity)
-        # Send Telegram notification
-        try:
-            from backend.services.telegram_alerts import send_guardian_reset
-            await send_guardian_reset(equity)
-        except Exception:
-            pass
-    except Exception as exc:
-        log.warning("[executor] NAV anchor failed: %s", exc)
-    _nav_anchored = True
+    """Mark startup observed without resetting any existing risk state."""
+    global _startup_observed
+    if not _startup_observed:
+        log.info("[executor] Startup observed; existing Guardian state preserved")
+        _startup_observed = True
 
 
 async def submit_order(symbol: str, side: str, qty: float, price: float) -> dict:
@@ -167,11 +148,19 @@ async def _executor_sweep() -> None:
     try:
         from backend.services.guardian_bot import service as guardian
         status = await guardian.get_guardian_status()
-        if status.kill_switch_active:
-            log.debug("[executor] Kill switch active — skipping sweep")
+        if (
+            status.kill_switch_active is not False
+            or status.triggered is not False
+            or status.heartbeat_healthy is not True
+            or status.reconciliation_drift_active is not False
+            or status.in_cooldown is not False
+            or await guardian.is_kill_switch_active()
+        ):
+            log.debug("[executor] Guardian not clear — skipping sweep")
             return
-    except Exception as exc:
-        log.warning("[executor] Guardian check failed: %s", exc)
+    except Exception:
+        log.warning("[executor] Guardian check unavailable — skipping sweep")
+        return
 
     # Get current signals
     try:

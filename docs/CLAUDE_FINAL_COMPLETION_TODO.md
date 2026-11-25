@@ -1,0 +1,135 @@
+# Claude Code — Crypto Signal Bot final completion checklist
+
+**Checkpoint: 2026-11-25.** This is the remaining-work index for Claude Code and
+other engineers, not an approval or assertion that funded execution is ready.
+Only Crypto Signal Bot is in scope. Do not integrate GEM Copy Center or other
+GEM repositories. Reuse the existing Azure workspace and free-first services;
+no new VM, Codespace, paid tier or unapproved costs.
+
+## Resume from the consolidated upstream branch
+
+- Repository: gem-cybersecurity-monitoring-assist/crypto-signal-bot.
+- Integration branch: integration/claude-release-validation-20261125; draft PR #295.
+- Earlier candidate PR #286 remains separate, head d253f653540fd88eefe3e4bf7cc3658221cdcca4.
+- Main at this checkpoint: 72c295e25295bcbf5dd4daa73878b0eb7891bd8e.
+- Claude fork commit already merged into the integration history: 169f1e4043d6b47e25c0f45aada6763c1a068419.
+- Prior integration checkpoint: d331e997bbaa3b749f7d44dbe0d20e1b98ab4558;
+  Worker CI run 45678805172 succeeded. Neither PR had recorded independent review.
+- Fetch the current upstream branch and check its tree, CI, reviews, open issues,
+  and concurrent changes before editing. Do not restart from the old Claude fork
+  or overwrite a green release candidate. Preserve the original Azure worktree's
+  local worker/src/index.ts modification. Use an isolated worktree.
+- Read AGENTS.md, CLAUDE.md, docs/SAFE_FAST_PATH/*, docs/CLAUDE_INTEGRATION_VALIDATION.md,
+  docs/PRODUCTION_COMPLETION_ACCEPTANCE.md, docs/FULL_LIVE_IMPLEMENTATION_ACCEPTANCE.md,
+  docs/LIVE_EXECUTION_ARCHITECTURE.md, docs/WORKER_PYTHON_BOUNDARY.md,
+  README_DEPLOY_HANDOFF.md. Older status documents are historical, not proof of
+  the present deployment; inspect actual implementations when documentation conflicts.
+
+## Implemented and verified
+
+- [x] Combine original release and Claude frontend/Python refactor without
+  replacing canonical Worker architecture or unrelated devcontainer setup.
+- [x] Resolve CI policy mismatch; retain pinned Worker contract workflow and
+  CircleCI aggregate gate. Keep stricter backend lint.
+- [x] Fix exact frontend alias audit resolution and backend test isolation.
+- [x] Reject invalid/stale price and candle observations; preserve provider
+  response clock distinct from local receipt time and trade event time.
+- [x] Prevent mixed candle histories during source changes and retain original
+  source-attributed candle batches; reject unsupported/synthetic inputs.
+- [x] Add prediction readiness API and bounded operator-authenticated read-only
+  Python-to-Worker Guardian comparison. No state authority was transferred.
+- [x] Preserve Guardian halt and drawdown on legacy executor startup; skip
+  sweep if Guardian is unavailable, triggered, halted, heartbeat unhealthy,
+  reconciling drift or cooling down. No new execution capability added.
+- [x] Azure Python suite 662/662 after latest correction; backend lint,
+  repository architecture audit, CI/release lock, static production contract,
+  production target checks and operator frontend safety pass.
+- [x] Previously recorded: 97 frontend tests, frontend production build,
+  711 Worker foundation tests, 280 overlapping provider contract tests,
+  61 Worker contracts; 90 focused candle/market-data/prediction tests.
+  See validation doc for exact scope. Re-run on changed components.
+- [x] Existing production frontend and Worker reachable at checkpoint;
+  release attestation ok=true, failures=[]; Worker health ok, market data
+  connected, paper/testnet, live and withdrawals disabled.
+- [ ] Latest candidate remote CI and independent review after this handoff.
+  A passed local test or old workflow is not current release acceptance.
+
+## Remaining engineering — sequential acceptance gates
+
+### P0: Consolidated deployment and architecture ownership
+- [ ] Verify PR #295 vs #286 and main ancestry, every unresolved review,
+  exact head CI including required CircleCI aggregate, and branch protections.
+  Coordinate one release path with the existing hourly release automation;
+  do not run overlapping production deployment or replace PR #286 silently.
+- [ ] Inventory canonical Worker/D1/KV/R2, private service bindings, Vercel
+  alias/manifest, identity project and actual Python origin. Record deployed
+  revisions and rollback target; do not infer Python deployment from Worker health.
+- [ ] Verify the latest exact integrated frontend build, typechecks, Python and
+  Worker tests, paper safety, local migration replay, and deployment dry-run.
+  Inspect the two existing warnings (Starlette deprecation and test mock
+  serialization); do not conceal failures or weaken tests.
+- [ ] Obtain genuine independent review and protected merge. After approved
+  main CI, use existing guarded paper deployment workflow with account-scoped
+  preflight, additive migration and rollback record. Keep known-good deployed
+  production available. Update Vercel only when required and authorized.
+  Verify exact release manifest, attestation, authenticated owner/admin access
+  and deployment probes. Do not deploy unreviewed candidate or change live locks.
+
+### P1: One operational system (paper-safe integration)
+- [ ] Inspect SAFE_FAST_PATH phase status; keep Worker/portfolio Durable Object
+  target ownership, with D1 projections. Do not create a second state writer.
+- [ ] Finish authenticated, versioned signal synchronization with deterministic
+  identity, sequence, source provenance, freshness, replay and divergence tests.
+  Python candle/REST research is analytical, never executable price proof.
+  End-to-end event-time, heartbeat and sequence continuity remain unverified.
+- [ ] Establish single authoritative Guardian state. Current comparison only
+  observes; test outage, split-brain, restart, stale status, explicit operator
+  reset and halt persistence. Never clear risk state on service startup.
+- [ ] Audit legacy Python executor: cached signal TTL, stale/REST prices,
+  fallback equity/open-position defaults, direct percentage sizing and
+  process-local last-acted state are unresolved architectural risks. Reconcile
+  with existing risk authority and single-writer target; avoid parallel automatic
+  order loops. Preserve supported paper behavior via reviewed migration and test
+  that missing data cannot authorize a new entry or falsely report a fill.
+- [ ] Reconcile portfolio, order identities, fills, reservations, cash, fees,
+  PnL, audit cursors and protected reserve against one authoritative ledger;
+  prove restart, duplicate, partial-fill and rollback behavior without copying
+  incompatible independent ledgers. Unknown evidence must remain not_reported.
+- [ ] Finish frontend wiring to canonical read models; verify authenticated
+  operator roles, token/session expiry, account isolation and iPhone UX.
+- [ ] Run deterministic simulation/replay, forward paper observation, fees,
+  slippage, drawdown and out-of-sample evaluation. Report measured limitations;
+  do not promise returns or label simulation evidence as actual provider fills.
+
+### P2: Provider and release certification dependencies
+- [ ] Verify current official BTCC supported API availability/contract; BTCC
+  remains intended primary, Bitget secondary. Do not guess endpoints or bypass
+  provider restrictions. Distinguish unsupported and unverified.
+- [ ] Recheck owner-managed credential metadata (prior check found no named
+  certification entries in the designated store; do not assume absent elsewhere).
+  Keep secret values out of Git, chat, logs, browser variables and artifacts.
+  Provider-issued credentials/permissions are owner-managed.
+- [ ] Complete authorized isolated authenticated read-only Bitget certification
+  after protected environment approval; confirm account model, scope, balances
+  and historical observations with redacted evidence. Local fixtures are not
+  external certification. Use provider-supported isolated demo only for
+  separate acceptance rehearsal; no funded orders from this handoff.
+- [ ] Record unresolved external provider and independent approval dependencies.
+  Review final execution architecture, risk limits, recovery, monitoring,
+  and exact release acceptance criteria with authorized personnel.
+- [ ] Keep paper/testnet, mainnet, real-funds, provider mutation and withdrawals
+  locks unchanged unless a separately reviewed and explicitly authorized
+  release permits a specific change. No live activation, real-money orders,
+  transfers or withdrawals are authorized by this checklist.
+
+## Definition of final handoff
+
+Update checkboxes only with commit SHA, actual test/run output and deployment
+evidence. Report completed, blocked, not verified, and next prerequisite
+separately. Continue independent unblocked engineering without duplicating
+work. Do not self-approve a review, weaken branch rules, or mark funded
+readiness from source tests. If approval/provider evidence is missing, keep
+the existing healthy deployment available and document the precise blocker.
+
+Production: https://crypto-signal-bot-indol.vercel.app
+Worker: https://crypto-signal-bot-api.analyzer-d94.workers.dev

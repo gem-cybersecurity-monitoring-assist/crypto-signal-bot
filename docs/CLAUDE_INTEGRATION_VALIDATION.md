@@ -78,3 +78,14 @@ lint and repository audit passed. A direct read-only production probe returned
 Worker observed, halted=false, legacy_d1, paper_locked=true; standalone local
 Python Guardian observation was unverified (no running loop in probe process).
 This is not production acceptance of the Python runtime or an execution gate.
+
+## Guardian startup and handoff increment
+Removed legacy executor automatic Guardian reset/drawdown re-anchor and
+made its sweep stop when Guardian state is halted, triggered, heartbeat
+unhealthy, drift active, in cooldown, or unavailable. Status separates
+startup observation from actual NAV anchoring. This does not establish a
+unified Guardian or complete risk/portfolio authority. Full backend suite
+662/662 passed, including 8 new focused tests; lint and static release
+checks passed. Production GET attestation and Worker health passed;
+existing paper/testnet deployment retained. Remaining tasks are tracked
+in CLAUDE_FINAL_COMPLETION_TODO.md and linked from root CLAUDE.md.
