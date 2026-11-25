@@ -253,6 +253,12 @@ async def lifespan(application):
     finally:
         heartbeat_task.cancel()
         ticker_task.cancel()
+        await asyncio.gather(heartbeat_task, ticker_task, return_exceptions=True)
+        try:
+            from backend.services.signal_service.service import stop_signal_service
+            await stop_signal_service()
+        except Exception:
+            logger.warning("Signal service shutdown failed (non-fatal).")
         # Persist portfolio before shutdown
         try:
             await persist_portfolio(paper_portfolio, mode=TRADING_MODE)

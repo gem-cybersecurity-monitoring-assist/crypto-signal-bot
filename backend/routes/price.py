@@ -256,7 +256,7 @@ async def get_prices_batch(
             change24h=snap.change24h,
             volume24h=float(snap.volume24h),
             marketCap=0.0,  # populated by CoinGecko enrichment layer if configured
-            lastUpdated=datetime.datetime.utcfromtimestamp(snap.fetched_at).isoformat() + "Z",
+            lastUpdated=datetime.datetime.fromtimestamp(snap.fetched_at, datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
             stale=snap.stale,
         ))
 

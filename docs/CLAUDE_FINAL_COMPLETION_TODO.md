@@ -150,3 +150,19 @@ Worker: https://crypto-signal-bot-api.analyzer-d94.workers.dev
   durable coordination; current sequential cache is not atomic and does
   not survive restart or replica boundaries.
 - [ ] All remaining production release/provider/authority gates above remain.
+
+## Agu continuation checkpoint
+
+- [x] Run complete root test directory: 554 passed, 3 skipped.
+- [x] Single-instance analytical signal lifecycle with awaited shutdown and
+  regression tests; full backend now 709 passed.
+- [x] Fix heartbeat test-double warnings and deprecated UTC conversion.
+- [x] Previous consolidated GitHub Worker CI 45694264116 passed; final
+  frontend build passed and production attestation remains healthy.
+- [ ] Investigate intermittent SQLite thread callback during test teardown,
+  other background task ownership, and legacy executor startup signature.
+  Do not enable another automatic execution loop as a side effect.
+- [ ] Resolve the three documented skipped external/integration checks
+  with appropriate isolated evidence. The legacy prediction interface,
+  cross-runtime state ownership, provider certification and protected
+  release remain open; a local pass does not establish live readiness.

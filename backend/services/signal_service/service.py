@@ -29,6 +29,7 @@ _TTL_SECONDS   = 900
 _signal_cache: Dict[str, SignalRecord] = {}
 _last_eval:    Dict[str, float]        = {}
 _running = False
+_eval_task: Optional[asyncio.Task] = None
 
 
 # Module-level singleton for OHLCV fetching
@@ -297,16 +298,42 @@ async def _eval_loop() -> None:
     global _running
     _running = True
     log.info("[signal_service] loop started — %d symbols", len(_SYMBOLS))
-    while True:
-        for symbol in _SYMBOLS:
-            try:
-                await evaluate_signal(symbol)
-            except Exception as exc:
-                log.warning("[signal_service] %s: %s", symbol, exc)
-            await asyncio.sleep(0.5)
-        await asyncio.sleep(_EVAL_INTERVAL)
+    try:
+        while _running:
+            for symbol in _SYMBOLS:
+                try:
+                    await evaluate_signal(symbol)
+                except Exception as exc:
+                    log.warning("[signal_service] %s: %s", symbol, exc)
+                await asyncio.sleep(0.5)
+            await asyncio.sleep(_EVAL_INTERVAL)
+    finally:
+        _running = False
 
 
 async def start_signal_service(app) -> None:
-    # Direct task creation — called from lifespan() which is already async
-    asyncio.create_task(_eval_loop())
+    """Start at most one analytical evaluation task per process."""
+    global _eval_task, _running
+    if _eval_task is not None and not _eval_task.done():
+        return
+    _running = True
+    _eval_task = asyncio.create_task(_eval_loop(), name="signal_service_evaluation")
+
+
+async def stop_signal_service() -> None:
+    """Await cancellation before persistence services are shut down."""
+    global _eval_task, _running
+    _running = False
+    task = _eval_task
+    if task is None:
+        return
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    finally:
+        if _eval_task is task:
+            _eval_task = None
+        _signal_cache.clear()
+        _last_eval.clear()

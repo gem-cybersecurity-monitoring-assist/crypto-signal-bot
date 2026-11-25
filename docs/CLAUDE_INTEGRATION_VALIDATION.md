@@ -114,3 +114,28 @@ Legacy prediction route remains separate from running candle service;
 legacy optional idempotency is not atomic/durable; do not certify either
 as authoritative execution integration. Independent review and external
 provider certification remain open.
+
+## Agu workflow — regression coverage and analytical lifecycle checkpoint
+
+Previous published head 91692ba49b7891d4160acdc7412a2d9c51843d34 passed Worker
+CI 45694264116 and the final frontend build/typecheck. Rechecked both
+release PRs: no independent review recorded. Claude fork unchanged at 1ab19c9.
+Completed the previously unrun root Python test tree (557 collected).
+Added tracked single-instance analytical signal task lifecycle: repeated
+startup is idempotent, shutdown awaits cancellation, clears observation
+cache and joins ticker/heartbeat tasks before database shutdown. No new
+execution authority or automatic order loop enabled. Updated three
+synchronous heartbeat test doubles and UTC timestamp conversion.
+
+Exact local results after changes: 709 backend tests passed; root suite
+554 passed, 3 skipped; focused lifecycle/coordinator/price tests 39 passed
+(overlap); backend lint and repository architecture audit passed.
+Three root skips: authenticated exchange access, legacy prediction-engine
+interface, running WebSocket/Redis end-to-end. Remaining warnings: Starlette
+TestClient deprecation, mocked Pydantic serialization, intermittent aiosqlite
+thread callback on closed loop, Decimal tolerance. Other service lifecycle
+ownership remains to be audited. Python executor startup signature mismatch
+is an unresolved integration finding; do not silently activate a parallel
+executor. Legacy prediction service remains separate. Current production
+attestation returned ok=true, failures=[], paper/testnet locks intact.
+No deployment or provider mutation performed.

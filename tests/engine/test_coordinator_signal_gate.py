@@ -190,7 +190,7 @@ class TestSignalGatePassThrough:
             patch(_PNL,   return_value=None),
             patch(_AUDIT, new=AsyncMock()),
             patch(_WS,    new=AsyncMock()),
-            patch(_HB,    new=AsyncMock()),
+            patch(_HB,    new=MagicMock()),
         ):
             result = await execute_intent(_intent("BUY"))
         assert result.status == "FILLED"
@@ -206,7 +206,7 @@ class TestSignalGatePassThrough:
             patch(_PNL,   return_value=None),
             patch(_AUDIT, new=AsyncMock()),
             patch(_WS,    new=AsyncMock()),
-            patch(_HB,    new=AsyncMock()),
+            patch(_HB,    new=MagicMock()),
         ):
             result = await execute_intent(_intent("SELL"))
         assert result.status == "FILLED"
@@ -222,7 +222,7 @@ class TestSignalGatePassThrough:
             patch(_PNL,   return_value=None),
             patch(_AUDIT, new=AsyncMock()),
             patch(_WS,    new=AsyncMock()),
-            patch(_HB,    new=AsyncMock()),
+            patch(_HB,    new=MagicMock()),
         ):
             result = await execute_intent(_intent("BUY"))
         assert result.status == "FILLED"
