@@ -17,6 +17,7 @@ import time
 log = logging.getLogger(__name__)
 
 MONITOR_INTERVAL = 30  # seconds
+_monitor_task: asyncio.Task | None = None
 
 
 async def _monitor_loop() -> None:
@@ -55,5 +56,21 @@ async def _monitor_loop() -> None:
 
 
 async def start_guardian_monitor(app) -> None:
-    # Direct task creation — called from lifespan() which is already async
-    asyncio.create_task(_monitor_loop())
+    global _monitor_task
+    if _monitor_task is None or _monitor_task.done():
+        _monitor_task = asyncio.create_task(_monitor_loop(), name="guardian_monitor")
+
+
+async def stop_guardian_monitor() -> None:
+    global _monitor_task
+    task = _monitor_task
+    if task is None:
+        return
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    finally:
+        if _monitor_task is task:
+            _monitor_task = None

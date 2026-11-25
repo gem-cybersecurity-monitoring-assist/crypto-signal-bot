@@ -175,3 +175,12 @@ Worker: https://crypto-signal-bot-api.analyzer-d94.workers.dev
 - [ ] Audit remaining background task ownership and concurrent lifecycle
   transitions; SQLite thread warning did not recur in the latest run but
   remains an intermittent finding until independently reproduced/resolved.
+
+## Background ownership increment
+- [x] Own and join the existing Guardian monitor, health monitor,
+  reconciliation and surge scanner background loops.
+- [x] Verify duplicate sequential starts and cancellation: 8 new tests;
+  full backend 720 passed, selected service group 63 passed (overlap).
+- [ ] Complete portfolio loop/persistence task ownership and concurrent
+  lifecycle verification; legacy executor activation remains out of scope
+  until authoritative state integration and reviewed release acceptance.

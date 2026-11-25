@@ -155,3 +155,18 @@ task shutdown defects. Other existing warnings remain. Concurrent database
 startup/teardown and remaining service ownership need further review.
 Previous published head 65e47c09 passed Worker CI run 45696777618.
 No production deployment, authority change or financial operation performed.
+
+## Background service ownership increment (2026-11-25)
+Existing Guardian monitor, health monitor, reconciliation and surge scanner
+loops now retain task handles, reject duplicate sequential starts, and await
+cancellation at shutdown. App lifespan directly awaits scanner startup and
+stops these services before portfolio persistence/database shutdown.
+No change to signal strategy, order routing, or financial authority.
+Eight new lifecycle tests cover duplicate starts, cancellation, restart and
+stop-before-first-tick. Azure full backend 720 passed; 63 focused service
+tests passed (overlap); lint and repository audit passed. Existing two
+test warnings remain, SQLite thread warning not observed in this run.
+Prior published checkpoint d48d8e11 passed Worker CI 45709367226.
+Remaining: portfolio snapshot/fill-task and persistence lifecycle, concurrent
+startup/shutdown race analysis, legacy executor signature mismatch (do not
+silently activate), and cross-runtime state/authority/release gates.

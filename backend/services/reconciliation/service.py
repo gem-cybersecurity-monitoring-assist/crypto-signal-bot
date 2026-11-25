@@ -172,19 +172,32 @@ async def _reconciliation_loop() -> None:
     log.info("[reconciliation] Loop stopped.")
 
 
+async def _owned_reconciliation_loop() -> None:
+    global _loop_running
+    try:
+        await _reconciliation_loop()
+    finally:
+        _loop_running = False
+
+
 async def start_reconciliation() -> None:
-    global _loop_task
-    if _loop_running:
-        return
-    _loop_task = asyncio.create_task(_reconciliation_loop())
+    global _loop_task, _loop_running
+    if _loop_task is None or _loop_task.done():
+        _loop_running = True
+        _loop_task = asyncio.create_task(_owned_reconciliation_loop(), name="reconciliation")
 
 
 async def stop_reconciliation() -> None:
     global _loop_running, _loop_task
     _loop_running = False
-    if _loop_task and not _loop_task.done():
-        _loop_task.cancel()
-        try:
-            await _loop_task
-        except asyncio.CancelledError:
-            pass
+    task = _loop_task
+    if task is None:
+        return
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    finally:
+        if _loop_task is task:
+            _loop_task = None

@@ -236,8 +236,7 @@ async def lifespan(application):
         logger.warning("Signal executor start skipped: %s", _exc)
     try:
         from backend.services.surge_scanner.service import start_surge_scanner as _start_surge
-        import asyncio as _asyncio
-        _asyncio.create_task(_start_surge(), name="surge_scanner_boot")
+        await _start_surge()
     except Exception as _exc:
         logger.warning("Surge scanner start skipped: %s", _exc)
     logger.info("All background services registered.")
@@ -259,12 +258,22 @@ async def lifespan(application):
             await stop_signal_service()
         except Exception:
             logger.warning("Signal service shutdown failed (non-fatal).")
+        from backend.services.guardian_bot.monitor import stop_guardian_monitor
+        from backend.services.monitoring.service import stop_monitoring_service
+        from backend.services.surge_scanner.service import stop_surge_scanner
+        for stop_service in (
+            stop_surge_scanner, stop_monitoring_service,
+            stop_guardian_monitor, stop_reconciliation,
+        ):
+            try:
+                await stop_service()
+            except Exception:
+                logger.warning("Background service shutdown failed: %s", stop_service.__name__)
         # Persist portfolio before shutdown
         try:
             await persist_portfolio(paper_portfolio, mode=TRADING_MODE)
         except Exception:
             logger.warning("Portfolio persist on shutdown failed (non-fatal).")
-        await stop_reconciliation()
         try:
             from backend.services.market_data.ingestion import pipeline as _ingestion_pipeline
             await _ingestion_pipeline.stop()
