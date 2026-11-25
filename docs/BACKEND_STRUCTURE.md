@@ -129,21 +129,31 @@ backend/
 ├── dependencies.py           # Shared FastAPI auth (require_auth)
 │
 └── tests/
-    ├── test_api.py           # API contract tests
-    ├── test_dependencies.py  # Auth dependency tests
-    ├── test_route_modules.py # Extracted route module tests
-    ├── test_earnings.py      # Earnings/FIFO tests
-    ├── test_market_data.py   # Market data tests
-    ├── test_live_mode.py     # Live mode routing tests
-    ├── test_risk.py          # Risk scoring tests
-    ├── test_risk_gate.py     # Risk gating / guardian tests
-    ├── test_signals.py       # Signal classification tests
-    ├── test_indicators.py    # Technical indicator tests
-    ├── test_strategies.py    # Strategy evaluation tests
-    ├── test_decision_trace.py # Decision trace tests
-    ├── test_mt5_integration.py # MT5 broker tests
-    ├── test_runtime_config.py  # Config tests
-    └── test_repo_audit.py    # Structural audit tests
+    ├── test_api.py                # API contract tests
+    ├── test_api_contracts.py      # Endpoint schema validation
+    ├── test_dependencies.py       # Auth dependency tests
+    ├── test_route_modules.py      # Extracted route module tests
+    ├── test_earnings.py           # Earnings/FIFO tests
+    ├── test_market_data.py        # Market data tests
+    ├── test_live_mode.py          # Live mode routing tests
+    ├── test_risk.py               # Risk scoring tests
+    ├── test_risk_gate.py          # Risk gating / guardian tests
+    ├── test_signals.py            # Signal classification tests
+    ├── test_indicators.py         # Technical indicator tests
+    ├── test_strategies.py         # Strategy evaluation tests
+    ├── test_decision_trace.py     # Decision trace tests
+    ├── test_mt5_integration.py    # MT5 broker tests
+    ├── test_runtime_config.py     # Config tests
+    ├── test_repo_audit.py         # Structural audit tests
+    ├── test_coordinator_validation.py  # Intent validation, boundaries
+    ├── test_venue_registry.py     # Venue register, availability
+    ├── test_broker_normalizer.py  # Order/position/fill normalization
+    ├── test_config_loader.py      # Sub-config accessors, URL redaction
+    ├── test_websocket_manager.py  # Connect/disconnect, broadcast
+    ├── test_state_machine.py      # Valid/invalid transitions
+    ├── test_pnl_engine.py         # FIFO lot matching, partial sells
+    ├── test_execution_router.py   # Venue routing (exchange + MT5)
+    └── test_portfolio_persistence.py # Save/restore, DB error resilience
 ```
 
 ## Key Patterns
