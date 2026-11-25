@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import json
 import re
 import subprocess
 from collections import Counter, defaultdict
@@ -142,11 +143,20 @@ def _resolve_frontend_import(path: Path, target: str) -> bool:
         base / "index.js",
         base / "index.jsx",
     ]
-    return any(candidate.exists() for candidate in candidates)
+    return any(candidate.is_file() for candidate in candidates)
 
 
 def check_frontend_relative_imports() -> list[str]:
     problems: list[str] = []
+    # Honor exact TypeScript aliases (for example the canonical backendRuntime
+    # mapping) before the generic @/* source-root convention.
+    config_path = ROOT / "tsconfig.json"
+    compiler_options = (
+        json.loads(config_path.read_text(encoding="utf-8")).get("compilerOptions", {})
+        if config_path.is_file() else {}
+    )
+    exact_paths = compiler_options.get("paths", {})
+    base_url = ROOT / compiler_options.get("baseUrl", ".")
     for root in frontend_roots():
         for path in list(root.rglob("*.ts")) + list(root.rglob("*.tsx")):
             try:
@@ -155,6 +165,13 @@ def check_frontend_relative_imports() -> list[str]:
                 continue
             for target in IMPORT_RE.findall(text):
                 if target.startswith("@/"):
+                    if target in exact_paths:
+                        if not any(
+                            _resolve_frontend_import(base_url / "_alias_origin.ts", candidate)
+                            for candidate in exact_paths[target]
+                        ):
+                            problems.append(f"{path.relative_to(ROOT)} -> {target}")
+                        continue
                     aliased = root / target[2:]
                     if not _resolve_frontend_import(aliased.parent / "_alias_origin.ts", "./" + aliased.name):
                         problems.append(f"{path.relative_to(ROOT)} -> {target}")

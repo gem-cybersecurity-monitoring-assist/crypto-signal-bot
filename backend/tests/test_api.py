@@ -1,6 +1,10 @@
 """Tests for API endpoints."""
 
 import asyncio
+import json
+import os
+import subprocess
+import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -1059,14 +1063,24 @@ class TestNewWsEndpoint:
 
 class TestRenderReadinessEndpoint:
     def test_ready_reports_auth_env_presence_without_secret(self):
-        with patch.dict("os.environ", {"BACKEND_API_KEY": "secret", "CORS_ORIGINS": "https://a.example"}, clear=False):
-            from backend.render_entrypoint import app as render_app
-
-            render_client = TestClient(render_app)
-            resp = render_client.get("/ready")
-
-        assert resp.status_code == 200
-        data = resp.json()
+        # The hosted entrypoint intentionally replaces routes on the canonical
+        # app during import. Test it in a fresh process, as in deployment, so
+        # later canonical API contract tests cannot inherit those overrides.
+        canonical_routes = tuple(app.router.routes)
+        result = subprocess.run(
+            [sys.executable, "-c", (
+                "import json; from fastapi.testclient import TestClient; "
+                "from backend.render_entrypoint import app; "
+                "r = TestClient(app).get('/ready'); "
+                "print(json.dumps({'status': r.status_code, 'data': r.json()}))"
+            )],
+            env={**os.environ, "BACKEND_API_KEY": "secret", "CORS_ORIGINS": "https://a.example"},
+            capture_output=True, text=True, timeout=30, check=True,
+        )
+        response = json.loads(result.stdout.splitlines()[-1])
+        assert tuple(app.router.routes) == canonical_routes
+        assert response["status"] == 200
+        data = response["data"]
         assert data["status"] == "ok"
         assert data["backend_api_key_configured"] is True
         assert data["cors_origins_configured"] is True

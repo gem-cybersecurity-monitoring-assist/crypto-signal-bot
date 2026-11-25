@@ -25,7 +25,7 @@ import time
 from typing import Dict
 
 from backend.config.settings import get_settings as _get_settings
-from backend.logic.decision_tracer import decision_tracer, HoldReason
+from backend.audit.tracer import decision_tracer, HoldReason
 
 log = logging.getLogger(__name__)
 
