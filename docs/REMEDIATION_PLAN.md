@@ -115,9 +115,10 @@ Goal: Align backend module layout with CLAUDE.md target architecture.
 
 **Result**: 100+ new tests added. Total backend tests now 580+.
 
-### 3.3 Add frontend component tests
+### 3.3 Add frontend component tests — DONE
 **Problem**: 0 component tests. Only 8 contract/integration test files exist.
 **Action**: Add Vitest + React Testing Library tests for critical components (ProtectedRoute, dashboard panels, auth flow).
+**Result**: Installed @testing-library/react + jsdom. Fixed vitest.config.ts with tsconfigPaths and jsdom environment. Added 25 component tests (Health 12, Audit 13). Fixed 3 existing tests needing Node environment. Fixed certification_mode_copy test. Total: 80 frontend tests (10 files).
 
 ### 3.4 Promote ruff to blocking — DONE
 **Problem**: Ruff runs in advisory mode (`--exit-zero`).
