@@ -233,3 +233,17 @@ Worker: https://crypto-signal-bot-api.analyzer-d94.workers.dev
 - [ ] Establish authoritative shared market event identity and sequence,
   unified Guardian and atomic ledger reconciliation. The new historical
   observation contract deliberately does not assert any of these.
+
+## Market-event and ledger integrity increment
+- [x] Reject malformed identity, sequence and time evidence; retain last accepted
+  market observation on rejected events, require explicit recovery for gaps.
+- [x] Reject invalid accounting directions, fill sides and nonpositive
+  reconstruction amounts using existing ledger modules.
+- [x] Verify 83 Worker contract/fast-path, 714 foundation and 31 focused
+  ledger/accounting tests (overlap), Worker build and safety checks.
+- [ ] Establish running authenticated feed gateway and provider event provenance,
+  sequence semantics and replay recovery. Existing registry remains ephemeral;
+  do not report it as shared authoritative state.
+- [ ] Continue shared Guardian and single-writer ledger integration, provider
+  certification and protected release review. Journal validation is not proof
+  of cross-runtime ledger reconciliation.

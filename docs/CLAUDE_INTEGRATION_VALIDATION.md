@@ -255,3 +255,25 @@ The new key is not configured in production by this increment; deployment,
 secure provisioning of a dedicated least-privilege key on both server
 runtimes, and authenticated end-to-end verification remain required.
 No secret values read or written, no production deployment.
+
+## Market-event integrity and ledger validation increment
+Hardened the existing shadow Worker event normalizers and feed registry.
+Missing provider timestamps no longer default to local receipt time; malformed
+or fractional sequences, noncanonical event IDs and future-dated observations
+are rejected. Rejected market updates do not advance accepted market timestamps.
+A known gap or malformed stream remains unavailable/resyncing until explicit
+recovery; recovery invalidates old observation timestamps. Heartbeats do not
+replace market-data freshness. This is shadow evidence validation, not a running
+production feed gateway or cross-runtime event synchronization.
+Hardened existing ledger journal and reconciliation validation so unknown
+debit/credit directions, unknown fill sides and nonpositive reconstruction
+amounts cannot be treated as valid accounting evidence. No changes to trade
+authorization, provider calls or ledger ownership.
+Azure: 83 Worker contract/fast-path tests, 31 focused ledger/accounting tests
+(overlap), 714 full Worker foundation tests passed; Worker TypeScript build,
+paper, regulated foundation and certification safety checks passed. Nine new
+test cases. Prior checkpoint 11c7693e CI 45720961334 passed. Production
+attestation ok=true, no failures. The Python source is unchanged from the
+previous 753-test checkpoint. Remaining: actual feed gateway, authenticated
+event provenance and sequence semantics, recovery lifecycle, shared Guardian,
+single-authority portfolio reconciliation, certification and reviewed deployment.

@@ -182,3 +182,12 @@ test('identical reconciliation evidence produces deterministic hash', async () =
   const second = await reconcileFillAccounting(input())
   assert.equal(first.reconciliationHash, second.reconciliationHash)
 })
+
+test('ledger reconstruction rejects malformed direction and nonpositive amount', () => {
+  assert.throws(() => calculateSignedLedgerBalance([
+    { direction: 'UNKNOWN' as 'CREDIT', amount: asDecimalString('10') },
+  ]), /Invalid ledger direction/)
+  assert.throws(() => calculateSignedLedgerBalance([
+    { direction: 'DEBIT', amount: asDecimalString('0') },
+  ]), /Ledger amount must be positive/)
+})

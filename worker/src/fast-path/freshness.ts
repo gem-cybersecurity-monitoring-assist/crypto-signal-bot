@@ -12,7 +12,7 @@ export function classifyFreshness(
   thresholds: Pick<FastPathThresholds, 'greenMaxAgeMs' | 'amberMaxAgeMs'> = DEFAULT_FAST_PATH_THRESHOLDS,
 ): FreshnessClass {
   if (eventAgeMs === null || !Number.isFinite(eventAgeMs)) return 'not_reported'
-  if (!integrityHealthy || eventAgeMs > thresholds.amberMaxAgeMs) return 'red'
+  if (eventAgeMs < 0 || !integrityHealthy || eventAgeMs > thresholds.amberMaxAgeMs) return 'red'
   if (eventAgeMs <= thresholds.greenMaxAgeMs) return 'green'
   return 'amber'
 }

@@ -66,3 +66,21 @@ describe('market event normalization', () => {
     expect(validateNormalizedEvent(event)).toContain('invalid_exchange_timestamp')
   })
 })
+
+describe('explicit source evidence', () => {
+  it('does not turn missing provider timestamps into receipt timestamps', () => {
+    const [coinbase] = normalizeCoinbaseMessage({ channel: 'l2_data', sequence_num: 1, product_id: 'BTC-USD' }, 1010)
+    const [binance] = normalizeBinanceMessage({ e: 'bookTicker', s: 'BTCUSDT', u: 1, b: '100', a: '101' }, 1010)
+    for (const event of [coinbase, binance]) {
+      expect(validateNormalizedEvent(event)).toContain('invalid_exchange_timestamp')
+    }
+  })
+
+  it('rejects fractional and unsafe sequence numbers', () => {
+    for (const sequenceEnd of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(validateNormalizedEvent(eventFixture({ sequenceStart: sequenceEnd, sequenceEnd }))).toContain('invalid_sequence')
+    }
+    const [event] = normalizeBinanceMessage({ e: 'bookTicker', s: 'BTCUSDT', u: '123bad', b: '100', a: '101' }, 1010)
+    expect(event.sequenceEnd).toBeUndefined()
+  })
+})

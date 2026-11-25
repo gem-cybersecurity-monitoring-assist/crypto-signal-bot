@@ -56,8 +56,14 @@ export class FeedHealthRegistry {
     const state = this.getOrCreate(key, event)
     const validationErrors = validateNormalizedEvent(event)
 
+    if (event.exchangeTsMs > nowMs || event.receivedTsMs > nowMs) validationErrors.push('future_event_timestamp')
+    if (!isHeartbeatEvent(event) && event.sequenceStart === undefined && event.sequenceEnd === undefined) {
+      validationErrors.push('missing_market_sequence')
+    }
+
     if (validationErrors.length > 0) {
       state.rejectedEventCount += 1
+      state.recoveryState = 'unavailable'
       state.integrityState = 'unavailable'
       state.lastErrorCode = validationErrors[0]
       this.refreshState(state, nowMs)
@@ -75,11 +81,9 @@ export class FeedHealthRegistry {
 
     this.rememberEventId(event.eventId)
     state.connectionState = 'connected'
-    state.lastReceivedTsMs = event.receivedTsMs
-    state.lastExchangeTsMs = event.exchangeTsMs
 
     if (isHeartbeatEvent(event)) {
-      state.lastHeartbeatTsMs = event.receivedTsMs
+      state.lastHeartbeatTsMs = Math.max(state.lastHeartbeatTsMs ?? 0, event.receivedTsMs)
       state.heartbeatState = 'healthy'
       state.acceptedEventCount += 1
       state.lastErrorCode = null
@@ -88,6 +92,13 @@ export class FeedHealthRegistry {
       return { accepted: true, reason: 'heartbeat', state: copyState(state) }
     }
 
+    // An observed update cannot repair a known gap or malformed stream by
+    // itself. Only the explicit recovery path may reset that state.
+    if (state.recoveryState === 'resyncing' || state.recoveryState === 'unavailable') {
+      state.rejectedEventCount += 1
+      this.refreshState(state, nowMs)
+      return { accepted: false, reason: 'invalid', state: copyState(state) }
+    }
     const sequenceState = classifySequence(state.lastSequence, event.sequenceStart, event.sequenceEnd)
     state.sequenceState = sequenceState
 
@@ -122,6 +133,8 @@ export class FeedHealthRegistry {
 
     const end = event.sequenceEnd ?? event.sequenceStart
     if (end !== undefined) state.lastSequence = end
+    state.lastReceivedTsMs = event.receivedTsMs
+    state.lastExchangeTsMs = event.exchangeTsMs
     state.acceptedEventCount += 1
     state.lastErrorCode = null
     if (state.recoveryState !== 'healthy') state.recoveryState = 'idle'
@@ -131,7 +144,9 @@ export class FeedHealthRegistry {
 
   markRecoveryHealthy(key: string, lastSequence: number, nowMs: number): FeedHealthState | null {
     const state = this.feeds.get(key)
-    if (!state) return null
+    if (!state || !Number.isSafeInteger(lastSequence) || lastSequence < (state.lastSequence ?? 0)) return null
+    state.lastReceivedTsMs = null
+    state.lastExchangeTsMs = null
     state.lastSequence = lastSequence
     state.sequenceState = 'continuous'
     state.recoveryState = 'healthy'
@@ -197,7 +212,7 @@ export class FeedHealthRegistry {
       const sameSource = state.source === event.source
       const sameSymbol = event.symbol === '*' || state.symbol === event.symbol
       if (!sameSource || !sameSymbol) continue
-      state.lastHeartbeatTsMs = event.receivedTsMs
+      state.lastHeartbeatTsMs = Math.max(state.lastHeartbeatTsMs ?? 0, event.receivedTsMs)
       state.heartbeatState = 'healthy'
       this.refreshState(state, nowMs)
     }
@@ -206,7 +221,7 @@ export class FeedHealthRegistry {
   private refreshState(state: MutableFeedState, nowMs: number): void {
     state.eventAgeMs = state.lastExchangeTsMs === null
       ? null
-      : Math.max(0, nowMs - state.lastExchangeTsMs)
+      : nowMs - state.lastExchangeTsMs
 
     state.heartbeatState = this.heartbeatState(state, nowMs)
     state.integrityState = this.integrityState(state)
@@ -230,7 +245,8 @@ export class FeedHealthRegistry {
 
   private heartbeatState(state: MutableFeedState, nowMs: number): HeartbeatState {
     if (state.lastHeartbeatTsMs === null) return 'missing'
-    return nowMs - state.lastHeartbeatTsMs <= this.thresholds.heartbeatTimeoutMs ? 'healthy' : 'stale'
+    const age = nowMs - state.lastHeartbeatTsMs
+    return age >= 0 && age <= this.thresholds.heartbeatTimeoutMs ? 'healthy' : 'stale'
   }
 
   private integrityState(state: MutableFeedState): IntegrityState {

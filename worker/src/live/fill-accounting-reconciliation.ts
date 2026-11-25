@@ -254,7 +254,11 @@ export function calculateSignedLedgerBalance(
   }[],
 ): SignedDecimalString {
   return entries.reduce<SignedDecimalString>((balance, entry) => {
-    const amount = signed(entry.amount)
+    if (entry.direction !== 'DEBIT' && entry.direction !== 'CREDIT') {
+      throw new TypeError('Invalid ledger direction')
+    }
+    const amount = signed(asDecimalString(entry.amount, 'ledger amount'))
+    if (compareDecimal(entry.amount, ZERO) <= 0) throw new TypeError('Ledger amount must be positive')
     return entry.direction === 'DEBIT'
       ? addSignedDecimal(balance, amount)
       : addSignedDecimal(balance, asSignedDecimalString(`-${entry.amount}`))
