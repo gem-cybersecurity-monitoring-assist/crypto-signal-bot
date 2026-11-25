@@ -130,9 +130,12 @@ Request:
   "side": "BUY",
   "order_type": "MARKET",
   "quantity": 0.01,
-  "price": null
+  "price": null,
+  "idempotency_key": "optional-unique-key"
 }
 ```
+
+The `idempotency_key` field is optional. When provided, duplicate requests with the same key return the original intent's ID with status `DUPLICATE_REJECTED` instead of executing again.
 
 Response:
 ```json
@@ -143,7 +146,7 @@ Response:
 }
 ```
 
-Status values: `FILLED`, `RISK_REJECTED`, `FAILED`.
+Status values: `FILLED`, `RISK_REJECTED`, `FAILED`, `DUPLICATE_REJECTED`.
 
 ### Kill-Switch & Guardian
 
