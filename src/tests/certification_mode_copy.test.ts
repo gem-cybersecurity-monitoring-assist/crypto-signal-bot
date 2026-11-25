@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 
@@ -15,6 +16,7 @@ const productFiles = [
   '../components/dashboard/EarningsPanel.tsx',
   '../components/dashboard/GuardianPanel.tsx',
   '../components/dashboard/SurgePanel.tsx',
+  '../hooks/useDashboardOrchestration.ts',
   '../../public/privacy/index.html',
 ] as const;
 
