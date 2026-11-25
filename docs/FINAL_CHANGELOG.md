@@ -5,8 +5,10 @@
 
 ## Summary
 
-- **600+ backend tests** (up from ~247 at start of remediation), **97 frontend tests** (up from 55)
-- **123+ new backend tests** added across venue registry, broker normalizer, coordinator, config loader, websocket manager, state machine, P&L engine, API contracts, execution router, portfolio persistence
+- **650+ backend tests** (up from ~247 at start of remediation), **97 frontend tests** (up from 55), **0 pre-existing failures remaining**
+- **180+ new backend tests** added across venue registry, broker normalizer, coordinator, config loader, websocket manager, state machine, P&L engine, API contracts, execution router, portfolio persistence, signal endpoint, guardian scoped, reconciliation service
+- **14 pre-existing test failures fixed** (10 in signal executor, 2 in market data, 1 signal gate, 1 intent/live)
+- **8 test lint issues fixed** (F811, E401, F841, E702 across 6 test files)
 - **42 new frontend component tests** added for Health, Audit, Settings, Portfolio pages
 - **1,862 lines of dead code** removed (14 orphaned legacy files)
 - **Ruff lint promoted to blocking** in CI (13 lint errors fixed)
@@ -24,19 +26,24 @@
 
 ## Phase 1: Backend Structural Refactor
 
-### 1.1 Split `app.py` monolith (PARTIAL)
+### 1.1 Split `app.py` monolith (DONE)
 
 Extracted inline endpoints into dedicated route modules:
 
 - `backend/routes/audit_v1.py` — audit, traces, metrics endpoints
 - `backend/routes/earnings_v1.py` — earnings summary, history, reset
 - `backend/routes/analysis_v1.py` — analyze-features, simulate-session
+- `backend/routes/config_v1.py` — config, version, mainnet-gate, runtime status
+- `backend/routes/exchange_v1.py` — exchange status, supported, circuit breakers, surge
+- `backend/routes/trading_v1.py` — balance, positions, orders, price, intent, withdraw
+- `backend/routes/reconciliation_v1.py` — reconciliation status, exchange reconciliation
 
 Created `backend/dependencies.py` with shared `require_auth` (sys.modules approach avoids import cycles).
+Created `backend/app_state.py` lazy accessor module to avoid circular imports between route modules and app.py.
+Created `backend/exceptions.py` for shared exception types (`ExchangeAPIError`) to break import cycles.
+Fixed pre-existing test isolation bug in `test_api.py::TestRenderReadinessEndpoint` (save/restore `app.router.routes`).
 
-Remaining ~30 endpoints need DI refactor for module-level state before extraction.
-
-**Files**: `backend/app.py`, `backend/routes/audit_v1.py`, `backend/routes/earnings_v1.py`, `backend/routes/analysis_v1.py`, `backend/dependencies.py`
+**Files**: `backend/app.py`, `backend/app_state.py`, `backend/exceptions.py`, `backend/routes/*.py`, `backend/dependencies.py`
 
 ### 1.2 Risk module consolidation (PARTIAL)
 
@@ -109,6 +116,8 @@ Added `push` and `pull_request` triggers to `.github/workflows/ci.yml`. Both fro
 | `test_pnl.py` | 12 | FIFO lot matching, partial sells, balance tracking |
 | `test_execution_router.py` | 13 | Venue routing (exchange + MT5), error propagation, BrokerRoutedOrder normalization |
 | `test_portfolio_persistence.py` | 10 | Restore, persist, order save, DB error resilience, mode parameter |
+| `test_signal_endpoint.py` | 6 | Prediction-service signal endpoint, side mapping, symbol normalization |
+| `test_guardian_scoped.py` | 43 | Scoped kill switches, reconciliation drift, cooldown, runtime thresholds, context mirroring |
 
 ### 3.3 Add frontend component tests (DONE)
 
@@ -173,9 +182,11 @@ Produced `docs/WORKER_PYTHON_BOUNDARY.md` covering:
 - Frontend configuration and routing
 - Unification roadmap (signal sync, single guardian, order reconciliation, shared audit, API gateway)
 
-### 5.1 Wire prediction bot (DEFERRED)
+### 5.1 Wire prediction bot (DONE)
 
-`prediction_bot/service.py` exists with full signal computation loop but is not yet wired into the coordinator pipeline. Requires coordinator DI refactor.
+Replaced market_state-cached `/signal/latest` with prediction service-backed endpoint in `routes/signal.py`. Added `side` field for backward compatibility (`UP`→`BUY`, `DOWN`→`SELL`, `NEUTRAL`→`NEUTRAL`), `message` field for unavailable state. Frontend normalizer (`paperSignal.ts`) updated to prefer `direction` over `side` and pass through `regime`/`horizon`.
+
+**New tests**: `test_signal_endpoint.py` (6 tests) — no-symbol unavailable, shape, unavailable message, side mapping, symbol normalization, prediction status.
 
 ---
 
@@ -221,16 +232,16 @@ Removed 1,862 lines across 14 files:
 - **`guardian_bot/service.py`**: Removed unused `cfg = get_risk_config()` assignments
 - **`monitoring/service.py`**: Removed unused `prev_ok` variable
 - **`test_audit_store_event_log.py`**: Fixed broken import after `logic/audit_store.py` → `audit/store.py` move
+- **`signal_executor/service.py`**: Fixed 4 broken `decision_tracer.record()` calls that used `HoldReason` as an enum when it's a dataclass — added `_trace_hold()` helper
+- **`test_signal_executor.py`**: Rewrote 10 tests that referenced deleted `_execute_symbol()` to use `_executor_sweep()` with proper mocks
+- **`routes/price.py`**: Added stale header (`X-Market-Data-Stale`) when `get_price()` returns stale snapshot (not just on exception path)
+- **`test_market_data.py`**: Updated staleness test to match current service behavior (stale snapshot return, not exception)
+- **`test_coordinator_signal_gate.py`**: Fixed `test_evaluate_uppercases_symbol` — route now passes `strategy` kwarg to `evaluate_signal()`
+- **`test_exchange_endpoints.py`**: Fixed `test_intent_live_returns_403` — endpoint returns string detail, not dict
 
 ---
 
 ## Remaining Work
-
-### High priority
-- Complete app.py endpoint extraction (Phase 1.1) — blocked on DI refactor for module-level state
-
-### Medium priority
-- Prediction bot integration (Phase 5.1) — service exists, needs coordinator wiring
 
 ### Low priority (blocked)
 - Live adapter integration tests (Phase 7) — requires owner authorization

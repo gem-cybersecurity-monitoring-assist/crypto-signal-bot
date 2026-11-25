@@ -4,7 +4,7 @@
 
 ## Authentication
 
-**API Key** (`X-API-Key` header): Required for write endpoints when `BACKEND_API_KEY` is set. When not set, all endpoints are open (dev/paper mode). Auth-required endpoints are marked below with **Auth**.
+**API Key** (`X-API-Key` header): Required for write endpoints when `BACKEND_API_KEY` is set. Some legacy dev/paper routes permit missing configuration. The runtime-comparison endpoint always requires a configured operator key; unavailable credentials fail closed. Auth-required endpoints are marked below with **Auth**.
 
 ## Core Endpoints
 
@@ -84,20 +84,29 @@ Error responses: `404` (symbol not tracked), `503` (market data unavailable).
 
 #### `GET /signal/latest` response
 
+The Python compatibility route returns a flat response, not a nested `signal`
+object. The legacy prediction service is separate from the running candle
+service; its availability does not establish shared execution authority.
+
 ```json
 {
-  "available": true,
-  "signal": {
-    "symbol": "BTCUSDT",
-    "direction": "UP",
-    "confidence": 0.85,
-    "regime": "TREND",
-    "strategy_id": "momentum-v1"
-  }
+  "symbol": "BTCUSDT",
+  "direction": "NEUTRAL",
+  "side": "NEUTRAL",
+  "confidence": 0.0,
+  "regime": "CHAOS",
+  "horizon": 0,
+  "available": false,
+  "source": "unavailable",
+  "computed_at": 0,
+  "reasoning": null,
+  "message": "Signal unavailable"
 }
 ```
 
-When unavailable: `{"available": false, "message": "No signal cached"}`.
+Use the versioned prediction-readiness endpoint for source-attributed candle
+observations. The Worker has its own distinct signal contract. Unifying
+these read models remains an explicit integration task.
 
 ### Portfolio & Trading
 
@@ -107,8 +116,8 @@ When unavailable: `{"available": false, "message": "No signal cached"}`.
 | GET | `/positions` | No | Open positions |
 | GET | `/orders` | No | Order history. Query: `?symbol=BTCUSDT` |
 | POST | `/intent/paper` | **Auth** | Submit paper trade intent |
-| POST | `/intent/live` | **Auth** | Submit live trade intent (blocked by kill switch) |
-| POST | `/withdraw` | **Auth** | Paper withdrawal simulation |
+| POST | `/intent/live` | **Auth** | Live intent endpoint (always blocked in this release) |
+| POST | `/withdraw` | **Auth** | Withdrawals disabled (HTTP 403) |
 
 #### `GET /balance` response
 
@@ -130,9 +139,12 @@ Request:
   "side": "BUY",
   "order_type": "MARKET",
   "quantity": 0.01,
-  "price": null
+  "price": null,
+  "idempotency_key": "optional-unique-key"
 }
 ```
+
+The legacy Python `idempotency_key` is optional. Its bounded process-local cache can detect sequential repeated keys but is not atomic across concurrent requests, eviction, restart or replicas. Do not treat this implementation as durable execution idempotency; authoritative coordination and migration remain acceptance requirements.
 
 Response:
 ```json
@@ -143,7 +155,7 @@ Response:
 }
 ```
 
-Status values: `FILLED`, `RISK_REJECTED`, `FAILED`.
+Status values: `FILLED`, `RISK_REJECTED`, `FAILED`, `DUPLICATE_REJECTED`.
 
 ### Kill-Switch & Guardian
 
@@ -250,7 +262,7 @@ Status values: `FILLED`, `RISK_REJECTED`, `FAILED`.
 
 Versioned API routes under `/api/v1/`. These are mounted via routers and serve the richer operational interface.
 
-> **Note**: Several routers have a double-prefix issue (e.g., `/api/v1/console/api/v1/console/...`). The frontend uses the actual resolved paths. This is documented as-is until the router mounting is cleaned up in Phase 1.1.
+> **Note**: The current consolidated FastAPI OpenAPI schema exposes single-prefix v1 paths; regression tests verify the extracted core routes and unique operation IDs. This does not establish the deployed Worker contract.
 
 ### Signals (`/api/v1/signals/...`)
 
@@ -258,6 +270,7 @@ Versioned API routes under `/api/v1/`. These are mounted via routers and serve t
 |--------|------|-------------|
 | GET | `.../public` | Public signal data |
 | GET | `.../status` | Signal engine status |
+| GET | `.../prediction/{symbol}` | Read-only freshness and candle provenance readiness |
 | GET | `.../{symbol}` | Signal for specific symbol |
 | POST | `.../evaluate` | Force re-evaluate a symbol |
 
@@ -314,6 +327,7 @@ Versioned API routes under `/api/v1/`. These are mounted via routers and serve t
 |--------|------|-------------|
 | GET | `.../status` | Monitor status |
 | GET | `.../probes` | Available probes |
+| GET | `.../runtime-comparison` | Operator-authenticated read-only Worker comparison; not execution authorization |
 | POST | `.../run` | Run probes now |
 | GET | `.../ingestion` | Ingestion telemetry |
 | GET | `.../ingestion/{symbol}` | Symbol ingestion telemetry |

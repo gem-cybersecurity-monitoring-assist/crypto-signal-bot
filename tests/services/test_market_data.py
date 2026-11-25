@@ -221,7 +221,9 @@ class TestStalenessDetection:
         _last_known["BTCUSDT"] = (ticker, old_ts)
 
         adapter = MagicMock()
-        adapter.fetch_ticker = AsyncMock(side_effect=AdapterUnavailableError("down"))
+        adapter.fetch_ticker = AsyncMock(
+            side_effect=AdapterUnavailableError("down"),
+        )
         adapter.exchange_name = "test"
 
         with patch("backend.services.market_data.service._get_adapters",

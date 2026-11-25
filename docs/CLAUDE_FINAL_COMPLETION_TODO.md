@@ -133,3 +133,20 @@ the existing healthy deployment available and document the precise blocker.
 
 Production: https://crypto-signal-bot-indol.vercel.app
 Worker: https://crypto-signal-bot-api.analyzer-d94.workers.dev
+
+## Subsequent Claude session recovery checkpoint
+
+- [x] Integrated latest Claude fork 1ab19c9 with the existing PR #295
+  candidate in a separate worktree, preserving prior Guardian guards.
+- [x] Added 29 extracted API contract tests and corrected API documentation.
+- [x] Fixed application-wide TypeScript alias and auth validation typing.
+- [x] Revalidated 707 backend, 167 selected legacy and 97 frontend tests,
+  full application TypeScript, lint and static release gates.
+- [ ] Complete broader coverage audit (including root tests outside
+  backend/tests); inspect warnings, lifecycle tests and route ownership.
+- [ ] Resolve legacy prediction-service versus candle-service read-model
+  divergence; do not add a competing execution authority.
+- [ ] Replace process-local optional idempotency with reviewed single-writer
+  durable coordination; current sequential cache is not atomic and does
+  not survive restart or replica boundaries.
+- [ ] All remaining production release/provider/authority gates above remain.

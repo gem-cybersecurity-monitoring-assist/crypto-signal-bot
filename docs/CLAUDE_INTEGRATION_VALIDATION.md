@@ -89,3 +89,28 @@ unified Guardian or complete risk/portfolio authority. Full backend suite
 checks passed. Production GET attestation and Worker health passed;
 existing paper/testnet deployment retained. Remaining tasks are tracked
 in CLAUDE_FINAL_COMPLETION_TODO.md and linked from root CLAUDE.md.
+
+## Resume after Claude Code usage limit (2026-11-25)
+Fetched Claude fork head 1ab19c9c7a369df7917f4732a654b00bcdd4fa55
+and merged against upstream integration head 74e5f4fc143346463ff59f656f76f514a2844ea0
+in an isolated Azure worktree. The latest fork adds extracted configuration,
+exchange, trading and reconciliation routes, prediction API compatibility,
+legacy process-local idempotency and scoped Guardian/reconciliation tests.
+Resolved three conflicts preserving original stale timestamps, no-store
+headers and subprocess readiness-test isolation. Updated legacy executor
+fixtures to explicitly represent healthy Guardian evidence, not bypass guards.
+Added 29 API-surface tests (26 route/method checks, schema uniqueness and
+prefix check, missing reconciliation, blocked live/withdrawal dispatch).
+Corrected API docs to reflect actual flat signal response, blocked withdrawals,
+operator comparison auth and legacy idempotency limitations.
+Fixed application tsconfig backend alias and explicit Zod failure narrowing.
+Evidence: 707 backend tests, 167 selected legacy/Guardian regression tests
+(overlap), 97 frontend tests, full app typecheck, backend lint, repository
+audit, CI independence, production targets and static release checks passed.
+Initial merged frontend production build and performance budget passed;
+final frontend build status is separately recorded in release evidence.
+Worker sources unchanged. No deployment or financial operation performed.
+Legacy prediction route remains separate from running candle service;
+legacy optional idempotency is not atomic/durable; do not certify either
+as authoritative execution integration. Independent review and external
+provider certification remain open.
