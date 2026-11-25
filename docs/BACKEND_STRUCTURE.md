@@ -17,7 +17,9 @@
 
 ```
 backend/
-├── app.py                    # FastAPI application entry, all route handlers
+├── app.py                    # FastAPI application entry, lifespan, core routes
+├── app_state.py              # Lazy accessor for app-level state (avoids circular imports)
+├── exceptions.py             # Shared exception types (ExchangeAPIError)
 ├── render_entrypoint.py      # Render-specific app wrapper
 ├── public_app.py             # Public-facing app (subset of routes)
 ├── health_wrapper.py         # Health check wrapper
@@ -75,11 +77,15 @@ backend/
 │   ├── audit_v1.py           # Audit, traces, metrics endpoints
 │   ├── earnings_v1.py        # Earnings summary, history, reset
 │   ├── analysis_v1.py        # Feature analysis, session simulation
+│   ├── config_v1.py          # Config/status endpoints (/config, /version, /runtime/status)
+│   ├── exchange_v1.py        # Exchange endpoints (/exchange/status, /market/feed/status)
+│   ├── trading_v1.py         # Trading/portfolio/price endpoints (/balance, /positions, /orders)
+│   ├── reconciliation_v1.py  # Reconciliation endpoints (/reconciliation/status)
 │   ├── kill_switch.py        # Kill-switch routes (global + scoped)
 │   ├── compatibility.py      # Hosted health routes (Render)
 │   ├── intent.py             # Intent routes (alternative router)
 │   ├── price.py              # Price routes (alternative router)
-│   ├── signal.py             # Signal routes
+│   ├── signal.py             # Signal routes (prediction service-backed /signal/latest)
 │   ├── broker.py             # Broker routes
 │   ├── integrations.py       # Public integration routes
 │   ├── waitlist.py           # Waitlist routes
@@ -87,7 +93,8 @@ backend/
 │
 ├── services/
 │   ├── guardian_bot/
-│   │   └── service.py        # Guardian safety monitor
+│   │   ├── service.py        # Guardian safety monitor (kill switch, scoped halts, reconciliation drift)
+│   │   └── monitor.py        # Background loop: portfolio equity → guardian drawdown/daily loss
 │   ├── reconciliation/
 │   │   └── service.py        # Periodic reconciliation loop
 │   ├── market_data/
@@ -153,7 +160,8 @@ backend/
     ├── test_state_machine.py      # Valid/invalid transitions
     ├── test_pnl_engine.py         # FIFO lot matching, partial sells
     ├── test_execution_router.py   # Venue routing (exchange + MT5)
-    └── test_portfolio_persistence.py # Save/restore, DB error resilience
+    ├── test_portfolio_persistence.py # Save/restore, DB error resilience
+    └── test_signal_endpoint.py    # Prediction-service signal endpoint
 ```
 
 ## Key Patterns
