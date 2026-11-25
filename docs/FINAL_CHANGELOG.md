@@ -5,8 +5,9 @@
 
 ## Summary
 
-- **580+ backend tests** (up from ~247 at start of remediation)
-- **100+ new tests** added across venue registry, broker normalizer, coordinator, config loader, websocket manager, state machine, P&L engine, API contracts
+- **580+ backend tests** (up from ~247 at start of remediation), **97 frontend tests** (up from 55)
+- **100+ new backend tests** added across venue registry, broker normalizer, coordinator, config loader, websocket manager, state machine, P&L engine, API contracts
+- **42 new frontend component tests** added for Health, Audit, Settings, Portfolio pages
 - **1,862 lines of dead code** removed (14 orphaned legacy files)
 - **Ruff lint promoted to blocking** in CI (13 lint errors fixed)
 - **CI enabled on push/PR** (was `workflow_dispatch` only)
@@ -109,9 +110,22 @@ Added `push` and `pull_request` triggers to `.github/workflows/ci.yml`. Both fro
 
 **Deferred**: `execution_router.py` (async mocks), `portfolio_persistence.py` (DB session mocks).
 
-### 3.3 Add frontend component tests
+### 3.3 Add frontend component tests (DONE)
 
-Not started (0 component tests). Vitest + React Testing Library recommended.
+Installed `@testing-library/react`, `@testing-library/jest-dom`, `@testing-library/user-event`, `jsdom`, `vite-tsconfig-paths`. Fixed `vitest.config.ts` to use jsdom environment and tsconfigPaths plugin for `@/` alias resolution.
+
+**New test files**:
+
+| File | Tests | Coverage |
+|------|-------|----------|
+| `Health.test.tsx` | 12 | Rendering, loading, unreachable, probes, uptime formatting |
+| `Audit.test.tsx` | 13 | Tab switching, intents/orders/risk, empty states, refetch |
+| `Settings.test.tsx` | 8 | Sections, guardian, market data, paper mode |
+| `Portfolio.test.tsx` | 9 | Stats, orders, positions, empty states, side indicators |
+
+**Fixes**: 3 existing tests annotated with `@vitest-environment node` for `readFile` + `import.meta.url` compatibility. `certification_mode_copy.test.ts` updated to include `useDashboardOrchestration.ts` after Phase 2.4 hook extraction. ResizeObserver polyfilled for Radix UI slider components.
+
+Total frontend tests: 97 (12 files), up from 55 (8 files).
 
 ### 3.4 Promote ruff to blocking (DONE)
 
@@ -126,7 +140,7 @@ Removed `--exit-zero` from CI ruff step.
 
 ---
 
-## Phase 4: Frontend Feature Completion (MOSTLY DONE)
+## Phase 4: Frontend Feature Completion (DONE)
 
 ### 4.1 Settings page (DONE)
 
