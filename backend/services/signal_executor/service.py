@@ -44,6 +44,28 @@ _last_run_at: int = 0
 _nav_anchored: bool = False   # NAV anchor flag — set once on first run
 
 
+def _trace_hold(symbol: str, reason_code: str, description: str, conf: float = 0.0,
+                threshold: float | None = None, actual: float | None = None) -> None:
+    """Record a HOLD decision trace without crashing the executor on tracer errors."""
+    try:
+        entry = decision_tracer.make_entry(
+            symbol=symbol,
+            decision="HOLD",
+            side=None,
+            confidence=conf,
+            strategy_id="combined",
+            signal_side="FLAT",
+            equity=0.0,
+            notional=0.0,
+            mode="paper",
+            hold_reasons=[HoldReason(code=reason_code, description=description,
+                                     threshold=threshold, actual=actual)],
+        )
+        decision_tracer.record(entry)
+    except Exception:
+        pass
+
+
 def get_executor_status() -> dict:
     return {
         "running":           _running,
@@ -211,17 +233,21 @@ async def _executor_sweep() -> None:
                         pnl=pnl, entry_price=entry_px
                     ))
                     _last_acted.pop(symbol, None)
-            decision_tracer.record(symbol, HoldReason.SIGNAL_FLAT, {"side": "FLAT", "conf": conf})
+            _trace_hold(symbol, "SIGNAL_FLAT", "Signal is FLAT", conf=conf)
             continue
 
         # ── Confidence gate ─────────────────────────────────────────
         if conf < MIN_CONFIDENCE:
-            decision_tracer.record(symbol, HoldReason.LOW_CONFIDENCE, {"conf": conf, "min": MIN_CONFIDENCE})
+            _trace_hold(symbol, "LOW_CONFIDENCE", "Confidence below threshold",
+                       conf=conf, threshold=MIN_CONFIDENCE, actual=conf)
             continue
 
         # ── Same signal — no action ──────────────────────────────────
         if last is not None and last[0] == side and last[1] == strat:
-            decision_tracer.record(symbol, HoldReason.SIGNAL_UNCHANGED, {"side": side})
+            _trace_hold(
+                symbol, "SIGNAL_UNCHANGED",
+                f"Signal unchanged: {side}", conf=conf,
+            )
             continue
 
         # ── Close opposite position if exists ────────────────────────
@@ -241,7 +267,8 @@ async def _executor_sweep() -> None:
 
         # ── Position cap ─────────────────────────────────────────────
         if open_count >= MAX_POSITIONS:
-            decision_tracer.record(symbol, HoldReason.MAX_POSITIONS, {"open": open_count, "max": MAX_POSITIONS})
+            _trace_hold(symbol, "MAX_POSITIONS", f"At position cap ({open_count}/{MAX_POSITIONS})",
+                       conf=conf, threshold=float(MAX_POSITIONS), actual=float(open_count))
             continue
 
         # ── Size and open ────────────────────────────────────────────
