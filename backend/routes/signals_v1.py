@@ -107,9 +107,19 @@ async def prediction_readiness(symbol: str) -> dict:
     record = get_cached_signal(symbol)
     now = int(time.time())
     status = "not_reported"
+    provider_clock_status = "not_reported"
+    provider_clock_kind = None
+    provider_clock_ms = None
     if record is not None:
         metadata = record.metadata or {}
         observed = metadata.get("price_observed_at")
+        stamp = metadata.get("provider_timestamp_ms")
+        kind = metadata.get("provider_timestamp_kind")
+        if metadata.get("price_source") == "bitget" and kind == "bitget_ticker_current_time" and type(stamp) is int:
+            provider_clock_kind = kind
+            provider_clock_ms = stamp
+            age_ms = now * 1000 - stamp
+            provider_clock_status = "current" if -999 <= age_ms <= 60000 else "outside_window"
         if record.strategy_id in {"error", "no_data", "insufficient_data"}:
             status = "unavailable"
         elif not record.created_at <= now < record.valid_until:
@@ -129,6 +139,12 @@ async def prediction_readiness(symbol: str) -> dict:
         "execution_authorized": False,
         "provider_mutation_allowed": False,
         "worker_synchronized": False,
+        "provider_clock": {
+            "status": provider_clock_status,
+            "kind": provider_clock_kind,
+            "timestamp_ms": provider_clock_ms,
+            "trade_event_time_verified": False,
+        },
     }
 
 

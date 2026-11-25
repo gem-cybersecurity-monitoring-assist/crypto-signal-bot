@@ -63,6 +63,13 @@ async def test_existing_signal_cache_is_readiness_source(monkeypatch):
     assert data["execution_authorized"] is False
     assert data["provider_mutation_allowed"] is False
     assert data["worker_synchronized"] is False
+    assert data["provider_clock"]["status"] == "not_reported"
+    record.metadata.update(price_source="bitget", provider_timestamp_kind="bitget_ticker_current_time", provider_timestamp_ms=now * 1000)
+    clock = client.get(url).json()["provider_clock"]
+    assert clock["status"] == "current"
+    assert clock["trade_event_time_verified"] is False
+    record.metadata["provider_timestamp_ms"] = (now - 120) * 1000
+    assert client.get(url).json()["provider_clock"]["status"] == "outside_window"
     assert svc._persist_signal.await_count == 1
     record.metadata["price_observed_at"] = now - 61
     assert client.get(url).json()["status"] == "expired"

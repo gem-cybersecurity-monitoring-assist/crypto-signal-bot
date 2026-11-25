@@ -203,6 +203,8 @@ async def evaluate_signal(symbol: str, strategy: Optional[str] = None) -> Signal
     record.metadata["prediction_input_status"] = "validated_observations"
     record.metadata["price_observed_at"] = snapshot.fetched_at
     record.metadata["price_source"] = snapshot.source
+    record.metadata["provider_timestamp_ms"] = snapshot.provider_timestamp_ms
+    record.metadata["provider_timestamp_kind"] = snapshot.provider_timestamp_kind
     record.metadata["latest_candle_at"] = candles[-1].time
     if requested_strategy:
         record.metadata["requested_strategy"] = requested_strategy

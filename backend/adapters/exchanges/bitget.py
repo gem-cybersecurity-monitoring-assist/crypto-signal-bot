@@ -182,6 +182,10 @@ class BitgetAdapter(BaseExchangeAdapter):
         symbol = self._normalize_symbol(symbol)
         data   = await self._get_public("/api/v2/spot/market/tickers", {"symbol": symbol})
         t      = data[0] if isinstance(data, list) else data
+        if not isinstance(t, dict) or t.get("symbol") != symbol:
+            raise AdapterUnavailableError("Bitget ticker symbol mismatch")
+        raw_ts = t.get("ts")
+        provider_ts = int(raw_ts) if isinstance(raw_ts, str) and raw_ts.isascii() and raw_ts.isdecimal() and len(raw_ts) == 13 else None
         price  = Decimal(str(t.get("lastPr", t.get("close", 0))))
         bid    = Decimal(str(t.get("bidPr", price)))
         ask    = Decimal(str(t.get("askPr", price)))
@@ -194,6 +198,8 @@ class BitgetAdapter(BaseExchangeAdapter):
             change24h=float(t.get("change24h", t.get("changeUtc24h", 0))),
             volume24h=Decimal(str(t.get("baseVolume", t.get("volume24h", 0)))),
             timestamp=int(time.time()),
+            provider_timestamp_ms=provider_ts,
+            provider_timestamp_kind="bitget_ticker_current_time" if provider_ts is not None else None,
         )
 
     async def fetch_ohlcv(

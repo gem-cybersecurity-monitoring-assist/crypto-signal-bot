@@ -28,3 +28,21 @@ false. Retrieval time is not exchange event-time proof, and the candle chain
 does not yet carry end-to-end source provenance. Those are separate required
 integration gates. No new execution route or secondary loop was enabled.
 Azure: 10 focused tests, 623 total backend tests passed; backend lint passed.
+
+## Market-data identity and provider clock increment
+Bitget Classic spot public ticker documentation defines ts as current Unix
+milliseconds, not a verified trade event timestamp. Retain the raw validated
+provider clock separately from local receipt time through ticker, snapshot,
+Redis cache and prediction readiness. Other providers report no provider clock
+unless explicitly supported. The read-only endpoint reports current, outside
+window or not reported, and permanently denies trade-event verification and
+execution authorization. Reject mismatched ticker symbols before caching and
+exclude unexpected/duplicate batch symbols. Legacy price route now returns
+stale cache observations with original timestamp, explicit stale and no-store
+headers. Updated outdated stale-exception expectation to match the existing
+bounded snapshot contract; no weakening of stale classification.
+Source: https://www.bitget.com/legacy-docs/classic/spot/market/Get-Tickers
+Azure validation: 632 backend tests passed before legacy route correction;
+42 focused market-data and prediction tests passed after correction, including
+23 legacy market-data tests. No authenticated exchange calls or orders.
+End-to-end trade event sequence and candle provenance remain open.

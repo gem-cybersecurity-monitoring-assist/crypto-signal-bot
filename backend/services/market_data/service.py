@@ -160,6 +160,8 @@ class PriceSnapshot:
     source:           str    # exchange name, e.g. "btcc" or "binance"
     fetched_at:       int    # unix seconds
     stale:            bool   # True if age > STALE_THRESHOLD_SECONDS
+    provider_timestamp_ms: Optional[int] = None
+    provider_timestamp_kind: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -335,6 +337,8 @@ async def _fetch_ticker_with_failover(symbol: str) -> tuple[Ticker, str]:
                 ticker = await _get_coingecko_ticker_deduped(symbol)
             else:
                 ticker = await adapter.fetch_ticker(symbol)
+            if ticker.symbol != symbol:
+                raise AdapterUnavailableError("Ticker symbol mismatch")
             return ticker, adapter.exchange_name
         except (AdapterUnavailableError, AdapterRateLimitError) as exc:
             errors[adapter.exchange_name] = str(exc)
@@ -372,9 +376,10 @@ async def _fetch_tickers_with_failover(symbols: list[str]) -> list[tuple[Ticker,
         try:
             batch = await adapter.fetch_tickers(remaining)
             for ticker in batch:
+                if ticker.symbol not in remaining:
+                    continue
                 results.append((ticker, adapter.exchange_name))
-                if ticker.symbol in remaining:
-                    remaining.remove(ticker.symbol)
+                remaining.remove(ticker.symbol)
         except Exception as exc:
             log.warning("Batch fetch failed for %s: %s", adapter.exchange_name, exc)
 
@@ -424,6 +429,8 @@ async def _process_ticker_payload(
         redis_cfg = get_redis_config()
 
     symbol = requested_symbol or ticker.symbol
+    if ticker.symbol != symbol:
+        raise MarketDataUnavailable("Ticker symbol mismatch")
     cache_key = f"price:snapshot:{symbol}"
 
     snapshot = PriceSnapshot(
@@ -438,6 +445,8 @@ async def _process_ticker_payload(
         source=source_name,
         fetched_at=now,
         stale=False,
+        provider_timestamp_ms=ticker.provider_timestamp_ms,
+        provider_timestamp_kind=ticker.provider_timestamp_kind,
     )
 
     # Update in-process cache
@@ -455,6 +464,8 @@ async def _process_ticker_payload(
         "market_data_mode": snapshot.market_data_mode,
         "source": source_name,
         "fetched_at": now,
+        "provider_timestamp_ms": snapshot.provider_timestamp_ms,
+        "provider_timestamp_kind": snapshot.provider_timestamp_kind,
     }), ttl=redis_cfg.price_ttl_seconds)
 
     # Publish to WebSocket broadcaster
@@ -477,7 +488,7 @@ async def get_price(symbol: str) -> PriceSnapshot:
 
     Returns a PriceSnapshot with real exchange data.
     Raises MarketDataUnavailable if all adapters are unreachable.
-    Raises MarketDataStale if cached data exists but is past the threshold.
+    Returns an explicitly stale snapshot from bounded cache on adapter failure.
 
     NEVER returns synthetic/fabricated price data.
     """
@@ -493,7 +504,7 @@ async def get_price(symbol: str) -> PriceSnapshot:
         if symbol in _last_known:
             ticker, cached_at = _last_known[symbol]
             age = now - cached_at
-            if age <= PRICE_STALE_THRESHOLD_SECONDS * 5:
+            if 0 <= age <= PRICE_STALE_THRESHOLD_SECONDS * 5:
                 # Return stale snapshot — clearly marked, not fabricated
                 return PriceSnapshot(
                     symbol=symbol,
@@ -507,6 +518,8 @@ async def get_price(symbol: str) -> PriceSnapshot:
                     source=f"cache:{int(age)}s_old",
                     fetched_at=cached_at,
                     stale=True,
+                    provider_timestamp_ms=ticker.provider_timestamp_ms,
+                    provider_timestamp_kind=ticker.provider_timestamp_kind,
                 )
         raise  # No cache — propagate as unavailable
 
