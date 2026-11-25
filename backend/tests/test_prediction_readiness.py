@@ -47,9 +47,12 @@ def test_invalid_market_observations(case):
 @pytest.mark.asyncio
 async def test_existing_signal_cache_is_readiness_source(monkeypatch):
     from backend.app import app
+    monkeypatch.setattr(svc, "_signal_cache", {})
     now = int(time.time())
     snapshot, candles = inputs(now)
-    monkeypatch.setattr(svc, "_fetch_candles", AsyncMock(return_value=candles))
+    from backend.services.market_data.ingestion import CandleObservation
+    observation = CandleObservation("BTCUSDT", "1h", "binance", now, tuple(candles))
+    monkeypatch.setattr(svc, "_fetch_candles", AsyncMock(return_value=observation))
     monkeypatch.setattr(svc, "get_price", AsyncMock(return_value=snapshot))
     monkeypatch.setattr(svc, "_persist_signal", AsyncMock())
     assert svc.prediction_input_error("BTCUSDT", snapshot, candles, now) is None
@@ -63,6 +66,11 @@ async def test_existing_signal_cache_is_readiness_source(monkeypatch):
     assert data["execution_authorized"] is False
     assert data["provider_mutation_allowed"] is False
     assert data["worker_synchronized"] is False
+    assert record.metadata["candle_source"] == "binance"
+    assert record.metadata["trade_event_time_verified"] is False
+    record.metadata["candle_observed_at"] = now - 76
+    assert client.get(url).json()["status"] == "expired"
+    record.metadata["candle_observed_at"] = now
     assert data["provider_clock"]["status"] == "not_reported"
     record.metadata.update(price_source="bitget", provider_timestamp_kind="bitget_ticker_current_time", provider_timestamp_ms=now * 1000)
     clock = client.get(url).json()["provider_clock"]

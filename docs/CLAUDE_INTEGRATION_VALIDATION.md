@@ -46,3 +46,19 @@ Azure validation: 632 backend tests passed before legacy route correction;
 42 focused market-data and prediction tests passed after correction, including
 23 legacy market-data tests. No authenticated exchange calls or orders.
 End-to-end trade event sequence and candle provenance remain open.
+
+## Candle provenance increment
+Ingestion retains the exact most recent nonempty adapter-attributed batch
+separately from the deduplicated historical ring buffer. Provider changes
+reset the ring; failed fetches invalidate the observation. The strict
+prediction path uses one attributed batch only, refuses unknown sources,
+synthetic CoinGecko candles and the uncertified BTCC candle source, and
+checks batch symbol, interval, receipt age, sequence and OHLCV values.
+Duplicate timestamps cannot be hidden by ring-buffer deduplication.
+Legacy candle consumers retain their existing list interface. Coinbase
+adapter source naming corrected. Prediction readiness expires the candle
+observation and explicitly leaves trade-event time and execution unverified.
+This is local adapter attribution, not authenticated provider provenance.
+No cross-runtime authority or funded execution was introduced.
+Azure validation: 639 backend tests, 90 selected ingestion/market-data/
+prediction tests (overlap), backend lint and repository audit passed.

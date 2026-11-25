@@ -128,6 +128,10 @@ async def prediction_readiness(symbol: str) -> dict:
             status = "unverified"
         elif type(observed) is not int or not 0 <= now - observed <= 60:
             status = "expired"
+        elif metadata.get("candle_provenance") != "adapter_attributed_batch":
+            status = "unverified"
+        elif type(metadata.get("candle_observed_at")) is not int or not 0 <= now - metadata["candle_observed_at"] <= 75:
+            status = "expired"
         else:
             status = "available"
     return {

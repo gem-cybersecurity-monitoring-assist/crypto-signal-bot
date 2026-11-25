@@ -61,7 +61,7 @@ async def _get_ohlcv_adapter():
     return _ohlcv_adapter
 
 
-async def _fetch_candles(symbol: str, limit: int = _CANDLE_LIMIT):
+async def _fetch_candles(symbol: str, limit: int = _CANDLE_LIMIT, *, require_provenance: bool = False):
     """
     Fetch OHLCV candles with a 3-tier priority chain:
       0. IngestionPipeline ring buffer  — zero-latency in-memory path (preferred)
@@ -72,10 +72,25 @@ async def _fetch_candles(symbol: str, limit: int = _CANDLE_LIMIT):
     it eliminates network round-trips entirely from the signal evaluation loop,
     cutting per-evaluation latency from ~500ms to <1ms.
     """
+    from backend.services.market_data.ingestion import (
+        CANDLE_SOURCES, CandleObservation, get_candle_observation,
+    )
+
+    def result(candles, source):
+        if not require_provenance:
+            return candles
+        return CandleObservation(symbol, _TIMEFRAME, source, int(time.time()), tuple(candles))
+
     # 0. In-memory ring buffer (IngestionPipeline) — zero network cost
     try:
         from backend.services.market_data.ingestion import get_candles_from_buffer
-        buffered = get_candles_from_buffer(symbol, limit)
+        if require_provenance:
+            obs = get_candle_observation(symbol, limit)
+            if obs is not None and len(obs.candles) >= 30:
+                return obs
+            buffered = []
+        else:
+            buffered = get_candles_from_buffer(symbol, limit)
         if buffered and len(buffered) >= 30:   # at minimum need BB20 warm-up
             log.debug(
                 "[signal_service] %s: %d candles from ingestion ring buffer (zero-latency)",
@@ -98,7 +113,8 @@ async def _fetch_candles(symbol: str, limit: int = _CANDLE_LIMIT):
             if candles and len(candles) >= 2:
                 log.debug("[signal_service] %s: %d candles from BinanceUsOhlcvAdapter",
                           symbol, len(candles))
-                return candles
+                if not require_provenance or len(candles) >= 30:
+                    return result(candles, "binance_us_ohlcv")
             elif candles:
                 log.debug("[signal_service] %s: only %d candles — trying fallback",
                           symbol, len(candles))
@@ -111,14 +127,16 @@ async def _fetch_candles(symbol: str, limit: int = _CANDLE_LIMIT):
         adapters = await _get_adapters()
         for adapter in adapters:
             try:
+                if require_provenance and adapter.exchange_name not in CANDLE_SOURCES:
+                    continue
                 candles = await adapter.fetch_ohlcv(symbol, _TIMEFRAME, limit)
-                if candles:
-                    return candles
+                if candles and (not require_provenance or len(candles) >= 30):
+                    return result(candles, adapter.exchange_name)
             except Exception:
                 continue
     except Exception as exc:
         log.warning("fetch_candles(%s): %s", symbol, exc)
-    return []
+    return None if require_provenance else []
 
 
 def prediction_input_error(symbol, snapshot, candles, now: int) -> Optional[str]:
@@ -160,15 +178,29 @@ def prediction_input_error(symbol, snapshot, candles, now: int) -> Optional[str]
 async def evaluate_signal(symbol: str, strategy: Optional[str] = None) -> SignalRecord:
     requested_strategy = strategy.strip().lower() if isinstance(strategy, str) and strategy.strip() else None
     symbol = symbol.strip().upper()
+    from backend.services.market_data.ingestion import CANDLE_SOURCES, CandleObservation, FRESHNESS_WARN_THRESHOLD
     snapshot = None
+    observation = None
     try:
-        candles = await _fetch_candles(symbol)
+        observation = await _fetch_candles(symbol, require_provenance=True)
         snapshot = await get_price(symbol)
     except Exception:
-        candles = []
+        observation = None
 
     now = int(time.time())
-    input_error = prediction_input_error(symbol, snapshot, candles, now)
+    valid_observation = (
+        isinstance(observation, CandleObservation)
+        and observation.symbol == symbol
+        and observation.interval == _TIMEFRAME
+        and observation.source in CANDLE_SOURCES
+        and type(observation.fetched_at) is int
+        and 0 <= now - observation.fetched_at <= FRESHNESS_WARN_THRESHOLD
+    )
+    candles = observation.candles if valid_observation else ()
+    input_error = (
+        prediction_input_error(symbol, snapshot, candles, now)
+        if valid_observation else "candle_provenance_unavailable"
+    )
     current_price = float(snapshot.price) if input_error is None else 0.0
 
     if input_error is not None:
@@ -206,6 +238,10 @@ async def evaluate_signal(symbol: str, strategy: Optional[str] = None) -> Signal
     record.metadata["provider_timestamp_ms"] = snapshot.provider_timestamp_ms
     record.metadata["provider_timestamp_kind"] = snapshot.provider_timestamp_kind
     record.metadata["latest_candle_at"] = candles[-1].time
+    record.metadata["candle_source"] = observation.source
+    record.metadata["candle_observed_at"] = observation.fetched_at
+    record.metadata["candle_provenance"] = "adapter_attributed_batch"
+    record.metadata["trade_event_time_verified"] = False
     if requested_strategy:
         record.metadata["requested_strategy"] = requested_strategy
         record.metadata["strategy_parameter_supported"] = True
