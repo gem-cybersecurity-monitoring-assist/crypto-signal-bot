@@ -155,9 +155,9 @@ Goal: Align backend module layout with CLAUDE.md target architecture.
 **Problem**: `services/prediction_bot/` exists but is not integrated into the engine pipeline.
 **Action**: Wire into the coordinator's signal evaluation step.
 
-### 5.2 Document Worker/Python boundary
+### 5.2 Document Worker/Python boundary — DONE
 **Problem**: Both layers have signal/risk/execution logic. The boundary is unclear.
-**Action**: Produce a boundary document clarifying which layer owns which concern. Ensure no duplicate logic paths can produce conflicting decisions.
+**Action**: Produced `docs/WORKER_PYTHON_BOUNDARY.md` documenting route ownership, data flow, shared concerns (market data, signals, guardian, orders, audit), safety invariants, frontend configuration, and unification roadmap.
 
 ---
 

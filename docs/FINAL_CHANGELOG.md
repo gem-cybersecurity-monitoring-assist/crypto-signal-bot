@@ -13,7 +13,7 @@
 - **CI enabled on push/PR** (was `workflow_dispatch` only)
 - **Frontend cleaned** — API client consolidation, stub page deletion, hook extraction
 - **Backend modularized** — route extraction from app.py monolith, audit/policy/risk module restructuring
-- **8 documentation files** refreshed to match current implementation
+- **9 documentation files** produced or refreshed (including Worker/Python boundary doc)
 - **Landing page** built with feature grid and safety callout
 - **Settings page** built with server config viewer and dashboard preferences
 - **Portfolio page** built with positions table, order history, and live prices
@@ -160,9 +160,22 @@ Built standalone `Health.tsx` with 4 sections (backend service, guardian, market
 
 ---
 
-## Phase 5: Engine & Integration (NOT STARTED)
+## Phase 5: Engine & Integration (PARTIAL)
 
-Prediction bot wiring and Worker/Python boundary documentation remain deferred.
+### 5.2 Worker/Python boundary documentation (DONE)
+
+Produced `docs/WORKER_PYTHON_BOUNDARY.md` covering:
+- Two-runtime architecture table (Worker on Cloudflare vs Backend on FastAPI)
+- Complete route ownership map for both runtimes
+- Data flow diagram (frontend → edge/origin → databases)
+- Shared concern analysis: market data, signal engine, guardian state, paper orders, audit
+- Safety invariant comparison (both runtimes enforce paper mode independently)
+- Frontend configuration and routing
+- Unification roadmap (signal sync, single guardian, order reconciliation, shared audit, API gateway)
+
+### 5.1 Wire prediction bot (DEFERRED)
+
+`prediction_bot/service.py` exists with full signal computation loop but is not yet wired into the coordinator pipeline. Requires coordinator DI refactor.
 
 ---
 
@@ -214,13 +227,11 @@ Removed 1,862 lines across 14 files:
 ## Remaining Work
 
 ### High priority
-- Complete app.py endpoint extraction (Phase 1.1) — blocked on DI refactor
-- Frontend component tests (Phase 3.3)
+- Complete app.py endpoint extraction (Phase 1.1) — blocked on DI refactor for module-level state
 
 ### Medium priority
-- Prediction bot integration (Phase 5.1)
-- Worker/Python boundary documentation (Phase 5.2)
-- Tests for execution_router and portfolio_persistence (Phase 3.2)
+- Prediction bot integration (Phase 5.1) — service exists, needs coordinator wiring
+- Tests for execution_router and portfolio_persistence (Phase 3.2) — needs async/DB mocks
 
 ### Low priority (blocked)
 - Live adapter integration tests (Phase 7) — requires owner authorization
