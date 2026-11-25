@@ -119,7 +119,10 @@ Goal: Align backend module layout with CLAUDE.md target architecture.
 - [x] `services/portfolio_persistence.py` — 10 tests (restore, persist, order save, DB error resilience)
 - [x] `services/websocket_manager.py` — 13 tests (connect/disconnect, broadcast, dead clients)
 
-**Result**: 100+ new tests added. Total backend tests now 580+.
+- [x] `services/guardian_bot/service.py` — 43 tests (scoped kill switches, reconciliation drift, cooldown, runtime thresholds, context mirroring)
+- [x] `routes/signal.py` — 6 tests (prediction-service signal endpoint, side mapping, symbol normalization)
+
+**Result**: 170+ new tests added. Total backend tests now 650+.
 
 ### 3.3 Add frontend component tests — DONE
 **Problem**: 0 component tests. Only 8 contract/integration test files exist.
