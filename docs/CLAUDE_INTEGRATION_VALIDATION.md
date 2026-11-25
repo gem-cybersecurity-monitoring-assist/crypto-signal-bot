@@ -139,3 +139,19 @@ is an unresolved integration finding; do not silently activate a parallel
 executor. Legacy prediction service remains separate. Current production
 attestation returned ok=true, failures=[], paper/testnet locks intact.
 No deployment or provider mutation performed.
+
+## Database lifecycle checkpoint (2026-11-25)
+Fixed a closed-engine session-factory leak: shutdown now removes the published
+factory and engine before disposal, preventing new sessions from reopening
+the closed engine. Sequential repeated initialization reuses the active
+engine. Failed schema initialization disposes the unpublished engine and
+does not expose a usable session factory. Temporary SQLite and mocked engine
+tests cover restart, disposal, and failed initialization.
+Azure: 712 backend tests passed, 35 focused hardening/lifecycle tests and
+21 persistence/lifecycle tests passed (overlap); lint and architecture audit
+passed. The previous intermittent SQLite thread warning did not recur in
+the full backend run; this is not proof of resolution of all background
+task shutdown defects. Other existing warnings remain. Concurrent database
+startup/teardown and remaining service ownership need further review.
+Previous published head 65e47c09 passed Worker CI run 45696777618.
+No production deployment, authority change or financial operation performed.

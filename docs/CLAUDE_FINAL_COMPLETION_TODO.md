@@ -166,3 +166,12 @@ Worker: https://crypto-signal-bot-api.analyzer-d94.workers.dev
   with appropriate isolated evidence. The legacy prediction interface,
   cross-runtime state ownership, provider certification and protected
   release remain open; a local pass does not establish live readiness.
+
+## Database lifecycle increment
+- [x] Prevent session acquisition after database shutdown and after failed
+  initialization; verify sequential restart and repeated startup.
+- [x] Revalidate backend 712 passed; selected hardening 35 and persistence 21
+  passed (overlapping suites); prior GitHub CI 45696777618 succeeded.
+- [ ] Audit remaining background task ownership and concurrent lifecycle
+  transitions; SQLite thread warning did not recur in the latest run but
+  remains an intermittent finding until independently reproduced/resolved.
