@@ -62,3 +62,19 @@ This is local adapter attribution, not authenticated provider provenance.
 No cross-runtime authority or funded execution was introduced.
 Azure validation: 639 backend tests, 90 selected ingestion/market-data/
 prediction tests (overlap), backend lint and repository audit passed.
+
+## Cross-runtime observation increment
+Added operator-authenticated GET /api/v1/monitor/runtime-comparison. It
+reads a fixed canonical Worker infrastructure endpoint through a bounded
+HTTPS GET without credentials, redirects, or environment proxy configuration.
+Only typed, fresh v2 observations with healthy D1 and an available Guardian
+are compared. Local halt evidence is preserved; a local clear state requires
+a running Guardian loop and recent heartbeat. Missing or malformed evidence
+does not establish clearance. Matching observations do not unify authority.
+Signal synchronization and portfolio reconciliation remain not_reported.
+No financial state writes, automated dispatch, or authority changes added.
+Azure: 654 backend tests, including 15 new comparison and transport tests,
+lint and repository audit passed. A direct read-only production probe returned
+Worker observed, halted=false, legacy_d1, paper_locked=true; standalone local
+Python Guardian observation was unverified (no running loop in probe process).
+This is not production acceptance of the Python runtime or an execution gate.
