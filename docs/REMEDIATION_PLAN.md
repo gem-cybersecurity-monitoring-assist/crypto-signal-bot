@@ -137,8 +137,9 @@ Goal: Align backend module layout with CLAUDE.md target architecture.
 **Action**: Build a full positions view with open lots, unrealized PnL, entry prices, and position sizing. Wire to `/portfolio` route.
 **Result**: Full portfolio page with summary stats (equity, cash, position value), open positions table with live prices and 24h change, recent order history table with color-coded side/status.
 
-### 4.3 Enhance standalone pages
+### 4.3 Enhance standalone pages — DONE
 **Action**: Build out standalone Health and Audit pages with more detail than the dashboard panels provide. Wire to routes.
+**Result**: Built `Health.tsx` (backend service, guardian, market data, monitoring probes) and `Audit.tsx` (tabbed intents/orders/risk events with full history tables). Wired to `/health` and `/audit` routes.
 
 ### 4.4 Improve landing page — DONE
 **Problem**: `PublicHome.tsx` is minimal (28 lines).

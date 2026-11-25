@@ -16,6 +16,8 @@
 - **Landing page** built with feature grid and safety callout
 - **Settings page** built with server config viewer and dashboard preferences
 - **Portfolio page** built with positions table, order history, and live prices
+- **Health page** built with backend service, guardian, market data, and monitoring probe sections
+- **Audit page** built with tabbed intents, orders, and risk events views
 
 ---
 
@@ -138,9 +140,9 @@ Built full `Portfolio.tsx` with summary stats (total equity, cash balance, posit
 
 Built polished `PublicHome.tsx` with product overview, feature grid (6 panels), paper trading callout, and safety-first messaging. Replaced minimal 28-line stub.
 
-### 4.3 Standalone Health/Audit pages (NOT STARTED)
+### 4.3 Standalone Health/Audit pages (DONE)
 
-Health and Audit standalone pages remain as dashboard panels only.
+Built standalone `Health.tsx` with 4 sections (backend service, guardian, market data, monitoring probes with per-probe latency and failure counts) and standalone `Audit.tsx` with 3 tabbed views (intents, orders, risk events) showing full history tables with status badges, side indicators, and risk score coloring. Both pages wired to `/health` and `/audit` routes in `AppCore.tsx`.
 
 ---
 
@@ -202,7 +204,6 @@ Removed 1,862 lines across 14 files:
 - Frontend component tests (Phase 3.3)
 
 ### Medium priority
-- Standalone Health/Audit pages (Phase 4.3)
 - Prediction bot integration (Phase 5.1)
 - Worker/Python boundary documentation (Phase 5.2)
 - Tests for execution_router and portfolio_persistence (Phase 3.2)

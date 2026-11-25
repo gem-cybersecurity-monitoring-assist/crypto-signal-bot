@@ -11,7 +11,9 @@ const Account = lazy(() => import('./pages/Account'));
 const AdminCenter = lazy(() => import('./pages/AdminCenter'));
 const Auth = lazy(() => import('./pages/Auth'));
 const AuthRepair = lazy(() => import('./pages/AuthRepair'));
+const Audit = lazy(() => import('./pages/Audit'));
 const Backtest = lazy(() => import('./pages/Backtest'));
+const Health = lazy(() => import('./pages/Health'));
 const Index = lazy(() => import('./pages/Index'));
 const Infrastructure = lazy(() => import('./pages/Infrastructure'));
 const IntegrationsStatus = lazy(() => import('./pages/IntegrationsStatus'));
@@ -158,6 +160,8 @@ export default function AppCore() {
             <Route path="/dashboard" element={<DashboardPage><Index /></DashboardPage>} />
             <Route path="/backtest" element={<ProtectedPage><Backtest /></ProtectedPage>} />
             <Route path="/portfolio" element={<ProtectedPage><Portfolio /></ProtectedPage>} />
+            <Route path="/health" element={<ProtectedPage><Health /></ProtectedPage>} />
+            <Route path="/audit" element={<ProtectedPage><Audit /></ProtectedPage>} />
             <Route path="/settings" element={<ProtectedPage><Settings /></ProtectedPage>} />
             <Route path="/account" element={<AccountPage><Account /></AccountPage>} />
             <Route path="/integrations" element={<ProtectedPage><IntegrationsStatus /></ProtectedPage>} />
