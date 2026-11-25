@@ -127,13 +127,15 @@ Goal: Align backend module layout with CLAUDE.md target architecture.
 
 ## Phase 4: Frontend Feature Completion (Priority: MEDIUM)
 
-### 4.1 Implement Settings page
+### 4.1 Implement Settings page — DONE
 **Problem**: `Settings.tsx` is routed but shows "coming soon".
 **Action**: Build a config screen showing current trading mode, risk parameters, exchange connections, and guardian thresholds. Read-only in paper mode.
+**Result**: Full settings page with 4 read-only server config sections (system, risk engine, guardian, market data) + editable dashboard preferences (sliders, toggles) using usePersistedSettings.
 
-### 4.2 Implement Positions view
+### 4.2 Implement Positions view — DONE
 **Problem**: Dashboard has `PortfolioPanel` but no dedicated positions page.
 **Action**: Build a full positions view with open lots, unrealized PnL, entry prices, and position sizing. Wire to `/portfolio` route.
+**Result**: Full portfolio page with summary stats (equity, cash, position value), open positions table with live prices and 24h change, recent order history table with color-coded side/status.
 
 ### 4.3 Enhance standalone pages
 **Action**: Build out standalone Health and Audit pages with more detail than the dashboard panels provide. Wire to routes.
@@ -168,7 +170,7 @@ All exist in `docs/` but are stale from PR #75 era:
 - [x] `FRONTEND_STRUCTURE.md` — refreshed with current component inventory (18 pages, 20 components, 19 hooks)
 - [x] `BACKEND_STRUCTURE.md` — updated for current module map
 - [x] `RUNBOOK_LOCAL.md` — updated with integration test command and ruff flags
-- [ ] `FINAL_CHANGELOG.md` — update with all work since PR #81
+- [x] `FINAL_CHANGELOG.md` — refreshed with all work on current branch
 
 ---
 
