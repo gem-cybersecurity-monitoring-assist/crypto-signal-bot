@@ -18,9 +18,11 @@ log = logging.getLogger(__name__)
 
 MONITOR_INTERVAL = 30  # seconds
 _monitor_task: asyncio.Task | None = None
+_last_successful_cycle_at: int | None = None
 
 
 async def _monitor_loop() -> None:
+    global _last_successful_cycle_at
     from backend.services.guardian_bot.service import (
         update_drawdown, update_daily_loss, record_heartbeat,
     )
@@ -48,6 +50,7 @@ async def _monitor_loop() -> None:
             await update_drawdown(dd)
             await update_daily_loss(daily_loss_pct)
             record_heartbeat()
+            _last_successful_cycle_at = int(time.time())
 
             log.debug("[guardian_monitor] equity=%.2f peak=%.2f dd=%.2f%% daily_loss=%.2f%%",
                       equity, peak, dd, daily_loss_pct)
@@ -56,13 +59,15 @@ async def _monitor_loop() -> None:
 
 
 async def start_guardian_monitor(app) -> None:
-    global _monitor_task
+    global _monitor_task, _last_successful_cycle_at
     if _monitor_task is None or _monitor_task.done():
+        _last_successful_cycle_at = None
         _monitor_task = asyncio.create_task(_monitor_loop(), name="guardian_monitor")
 
 
 async def stop_guardian_monitor() -> None:
-    global _monitor_task
+    global _monitor_task, _last_successful_cycle_at
+    _last_successful_cycle_at = None
     task = _monitor_task
     if task is None:
         return

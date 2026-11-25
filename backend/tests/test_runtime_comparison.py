@@ -133,3 +133,42 @@ async def test_worker_transport_is_bounded(monkeypatch, case):
     else:
         assert result["status"] == "unavailable"
         assert result["halted"] is None
+
+
+def test_local_clear_requires_actual_monitor_cycle(monkeypatch):
+    from backend.logic import context
+    from backend.services.guardian_bot import monitor, service
+    now = int(time.time())
+    for module, attrs in [(context, ("kill_switch_active", "guardian_triggered")),
+                          (service, ("_kill_switch_active", "_triggered"))]:
+        for attr in attrs:
+            monkeypatch.setattr(module, attr, False)
+    monkeypatch.setattr(service, "_last_heartbeat_at", now)
+    monkeypatch.setattr(service, "_loop_running", True)
+    monkeypatch.setattr(monitor, "_monitor_task", SimpleNamespace(done=lambda: False))
+    monkeypatch.setattr(monitor, "_last_successful_cycle_at", None)
+    assert rc.local_guardian_observation(now)["halted"] is None
+    monkeypatch.setattr(monitor, "_last_successful_cycle_at", now)
+    monkeypatch.setattr(service, "_strategy_kill_switches", {"research"})
+    monkeypatch.setattr(service, "_reconciliation_drift_count", 1)
+    monkeypatch.setattr(service, "is_in_cooldown", lambda: True)
+    result = rc.local_guardian_observation(now)
+    assert result["halted"] is False
+    assert result["scope"] == "local_global_halt_only"
+    assert result["redis_verified"] is False
+    assert result["scoped_halts_present"] is True
+    assert result["reconciliation_drift"] is True
+    assert result["cooldown_active"] is True
+    assert rc.compare_observations(result, rc.worker_observation(fixture(now), now))["shared_clearance_verified"] is False
+    assert rc.local_guardian_observation(now + 91)["halted"] is None
+    monkeypatch.setattr(monitor, "_monitor_task", SimpleNamespace(done=lambda: True))
+    assert rc.local_guardian_observation(now)["halted"] is None
+
+
+def test_worker_nonpaper_observation_not_comparable():
+    now = time.time()
+    payload = fixture(now)
+    payload["runtime"]["allow_mainnet"] = True
+    result = rc.worker_observation(payload, now)
+    assert result["status"] == "runtime_unverified"
+    assert result["halted"] is None

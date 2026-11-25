@@ -204,3 +204,30 @@ direct unit tests are retained; it is not the current API read authority.
 This unifies Python reads only, not Python/Worker state authority, forecast
 classification, or authenticated exchange data. No trading dispatch,
 provider mutation, production deployment, or financial lock changes.
+
+## Durable diagnostic reports and Guardian observation (2026-11-25/26)
+Reconciliation previously claimed DB persistence but only cached four fields.
+It now saves successful local P&L diagnostic reports to the existing table,
+exposes committed/unavailable persistence status, and recovers the latest
+mode-scoped committed report as historical after loss of the process cache.
+Failed/non-finite observations supersede stale success with unavailable
+state and no fabricated balance in the read model. Expired, historical and
+discrepant reports are distinct; local ledger and Worker reconciliation
+remain explicitly false. The existing drift heuristic is not transaction
+reconciliation, and DB read failure versus absence needs further refinement.
+The Guardian comparison now uses the actual running monitor's successful
+cycle timestamp (not generic application heartbeat or the unlaunched
+separate service loop). Scoped blocks, cooldown and drift are distinguished
+from global halt; Redis/shared clearance remain unverified. Non-paper or
+missing runtime lock evidence cannot establish a comparable Worker state.
+Azure 740 backend tests passed, including 11 new tests; 47 initial
+reconciliation/API and 43 Guardian/lifecycle/reconciliation focused tests
+passed (overlap); lint and architecture audit passed. Two existing
+warnings remain. Prior head 1d0a14b3 Worker CI 45711248845 passed.
+Fresh read-only release checks: production attestation ok=true, failures=[];
+Cloudflare deployment 4680c449-ff3b-4965-a132-84918828a756, active version
+b6abf531-dfba-4b40-aa71-7a5e09a2c0c2 at 100%; no independent reviews on
+PRs #286/#295. Designated certification Secrets Store list returned zero
+entries; the three named Bitget certification entries were not present.
+This does not establish absence in all secret stores. No secret values
+read, no authenticated provider certification, no production mutation.

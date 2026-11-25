@@ -206,3 +206,18 @@ Worker: https://crypto-signal-bot-api.analyzer-d94.workers.dev
 - [ ] Review remaining legacy prediction code and skipped end-to-end check
   against the new actual read contract; do not wire a second engine merely
   to satisfy obsolete assertions. Complete external provider and release gates.
+
+## Reconciliation and Guardian evidence increment
+- [x] Persist local P&L diagnostic reports using existing report table and
+  distinguish historical, failed, expired, discrepant and unverified reports.
+- [x] Correct Guardian observation source to actual launched monitor cycle;
+  distinguish global observation from scoped/cooldown/drift/shared clearance.
+- [x] Revalidate 740 backend tests, lint, architecture audit; prior
+  Worker CI 45711248845 succeeded. Existing production attestation passed.
+- [x] Recheck actual review and certification prerequisites: no recorded
+  independent reviews on #286/#295; designated Bitget certification store
+  has no named entries. Preserve production and record the external gates.
+- [ ] Finish single-authority ledger/atomic transaction reconciliation and
+  Python–Worker shared event identity/sequence; current diagnostic storage
+  and Guardian observation are not authority migration. Distinguish missing
+  historical DB report from inaccessible storage on restart.

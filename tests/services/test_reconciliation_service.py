@@ -33,7 +33,8 @@ def _pnl_summary(
 
 
 @pytest.fixture(autouse=True)
-def reset_recon_state():
+def reset_recon_state(monkeypatch):
+    monkeypatch.setattr(recon_svc, "_persist_report", AsyncMock())
     recon_svc._last_report = None
     recon_svc._loop_running = False
     yield

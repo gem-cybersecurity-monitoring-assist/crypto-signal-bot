@@ -42,6 +42,8 @@ def worker_observation(payload: object, now: float) -> dict:
                 "allow_mainnet", "live_trading_enabled", "withdrawals_enabled"
             ))
         )
+        if not locks:
+            return {**unknown, "status": "runtime_unverified", "paper_locked": False}
         authority = path.get("authority")
         if authority not in ("legacy_d1", "shadow_durable_object", "portfolio_durable_object"):
             authority = None
@@ -86,17 +88,26 @@ async def fetch_worker_observation() -> dict:
 def local_guardian_observation(now: float) -> dict:
     """Snapshot the existing state without calling a provider or changing it."""
     from backend.logic import context
+    from backend.services.guardian_bot import monitor
     from backend.services.guardian_bot import service as guardian
 
     flags = (guardian._kill_switch_active, guardian._triggered, context.kill_switch_active, context.guardian_triggered)
+    evidence = {"scope": "local_global_halt_only", "redis_verified": False,
+                "scoped_halts_present": bool(guardian._strategy_kill_switches or guardian._venue_kill_switches),
+                "reconciliation_drift": guardian._reconciliation_drift_count > 0,
+                "cooldown_active": guardian.is_in_cooldown()}
+    if any(flag is True for flag in flags):
+        return {**evidence, "status": "observed", "halted": True}
     if not all(type(flag) is bool for flag in flags):
-        return {"status": "unverified", "halted": None}
-    if any(flags):
-        return {"status": "observed", "halted": True}
-    heartbeat = guardian._last_heartbeat_at
-    if not guardian._loop_running or type(heartbeat) is not int or not 0 <= now - heartbeat <= 90:
-        return {"status": "unverified", "halted": None}
-    return {"status": "observed", "halted": False}
+        return {**evidence, "status": "unverified", "halted": None}
+    # Generic application heartbeats do not prove that the portfolio Guardian
+    # has performed a successful check. Observe the actual launched monitor.
+    task = monitor._monitor_task
+    heartbeat = monitor._last_successful_cycle_at
+    if task is None or task.done() or type(heartbeat) is not int or not 0 <= now - heartbeat <= 90:
+        return {**evidence, "status": "unverified", "halted": None}
+    return {**evidence, "status": "observed", "halted": False,
+            "monitor_observed_at": heartbeat}
 
 
 def compare_observations(local: dict, remote: dict) -> dict:
@@ -112,6 +123,8 @@ def compare_observations(local: dict, remote: dict) -> dict:
         "python_guardian": local,
         "worker": remote,
         "guardian_comparison": comparison,
+        "guardian_comparison_scope": "global_halt_observations_only",
+        "shared_clearance_verified": False,
         "guardian_authority_unified": False,
         "signal_synchronization": "not_reported",
         "portfolio_reconciliation": "not_reported",
