@@ -5,8 +5,9 @@
 
 ## Summary
 
-- **650+ backend tests** (up from ~247 at start of remediation), **97 frontend tests** (up from 55)
+- **650+ backend tests** (up from ~247 at start of remediation), **97 frontend tests** (up from 55), **0 pre-existing failures remaining**
 - **170+ new backend tests** added across venue registry, broker normalizer, coordinator, config loader, websocket manager, state machine, P&L engine, API contracts, execution router, portfolio persistence, signal endpoint, guardian scoped
+- **12 pre-existing test failures fixed** (10 in signal executor, 2 in market data)
 - **42 new frontend component tests** added for Health, Audit, Settings, Portfolio pages
 - **1,862 lines of dead code** removed (14 orphaned legacy files)
 - **Ruff lint promoted to blocking** in CI (13 lint errors fixed)
@@ -230,6 +231,10 @@ Removed 1,862 lines across 14 files:
 - **`guardian_bot/service.py`**: Removed unused `cfg = get_risk_config()` assignments
 - **`monitoring/service.py`**: Removed unused `prev_ok` variable
 - **`test_audit_store_event_log.py`**: Fixed broken import after `logic/audit_store.py` → `audit/store.py` move
+- **`signal_executor/service.py`**: Fixed 4 broken `decision_tracer.record()` calls that used `HoldReason` as an enum when it's a dataclass — added `_trace_hold()` helper
+- **`test_signal_executor.py`**: Rewrote 10 tests that referenced deleted `_execute_symbol()` to use `_executor_sweep()` with proper mocks
+- **`routes/price.py`**: Added stale header (`X-Market-Data-Stale`) when `get_price()` returns stale snapshot (not just on exception path)
+- **`test_market_data.py`**: Updated staleness test to match current service behavior (stale snapshot return, not exception)
 
 ---
 
