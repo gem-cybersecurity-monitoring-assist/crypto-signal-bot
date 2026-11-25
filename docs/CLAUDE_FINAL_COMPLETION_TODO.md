@@ -247,3 +247,11 @@ Worker: https://crypto-signal-bot-api.analyzer-d94.workers.dev
 - [ ] Continue shared Guardian and single-writer ledger integration, provider
   certification and protected release review. Journal validation is not proof
   of cross-runtime ledger reconciliation.
+
+## Feed recovery increment
+- [x] Reject invalid and mixed-symbol recovery evidence; latch buffer overflow
+  and reject incomplete snapshot bridges.
+- [x] Verify 94 Worker contract/fast-path tests, build and paper-safety.
+- [ ] Integrate the recovery helper into a running, authenticated, symbol-bound
+  gateway with source-proven snapshot identity and durable recovery evidence.
+  Existing helper validation is not proof of synchronized runtime state.

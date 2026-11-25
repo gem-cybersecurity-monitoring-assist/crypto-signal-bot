@@ -277,3 +277,17 @@ attestation ok=true, no failures. The Python source is unchanged from the
 previous 753-test checkpoint. Remaining: actual feed gateway, authenticated
 event provenance and sequence semantics, recovery lifecycle, shared Guardian,
 single-authority portfolio reconciliation, certification and reviewed deployment.
+
+## Market-feed recovery integrity increment
+The existing Binance depth recovery helper now rejects malformed and
+future-dated events, mixed symbols, non-depth sources and invalid snapshot
+sequences. Buffer overflow latches unavailable rather than silently discarding
+history; reset/begin is required for a new recovery attempt. A partial bridge
+cannot be returned as an applicable batch, and buffered input is copied to
+prevent later caller mutation. Snapshot identity and authenticity remain
+caller dependencies; the helper is not a deployed feed gateway.
+Azure: 94 Worker contract/fast-path tests passed (11 new recovery cases),
+Worker TypeScript build and paper-safety checks passed. Prior checkpoint
+5a7c4032 passed Worker CI 45722916914. No authority, provider or deployment
+changes. Existing shared-feed, Guardian and ledger integration requirements
+remain open.
