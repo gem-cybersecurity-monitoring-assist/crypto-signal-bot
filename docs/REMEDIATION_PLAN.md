@@ -101,16 +101,16 @@ Goal: Align backend module layout with CLAUDE.md target architecture.
 **Problem**: GitHub Actions `ci.yml` is `workflow_dispatch` only. No CI runs on push or PR.
 **Action**: Add `push` and `pull_request` triggers to `ci.yml`. Ensure pytest + tsc + vite build all run.
 
-### 3.2 Expand backend test coverage — MOSTLY DONE
+### 3.2 Expand backend test coverage — DONE
 **Test files added**:
 - [x] `engine/coordinator.py` — 16 tests (validation, boundary values, exception types)
-- [ ] `engine/execution_router.py` — requires async mocks (deferred)
+- [x] `engine/execution_router.py` — 13 tests (venue routing, MT5 paths, error propagation, normalization)
 - [x] `engine/pnl.py` — 12 tests (FIFO, partial sells, balance tracking)
 - [x] `engine/state_machine.py` — 16 tests (transitions, terminal states, helpers)
 - [x] `engine/broker_normalizer.py` — 14 tests (order/position/fill/health normalization)
 - [x] `engine/venue_registry.py` — 17 tests (register, availability, symbol filtering)
 - [x] `config/loader.py` — 12 tests (sub-config accessors, frozen, URL redaction)
-- [ ] `services/portfolio_persistence.py` — requires DB session mocks (deferred)
+- [x] `services/portfolio_persistence.py` — 10 tests (restore, persist, order save, DB error resilience)
 - [x] `services/websocket_manager.py` — 13 tests (connect/disconnect, broadcast, dead clients)
 
 **Result**: 100+ new tests added. Total backend tests now 580+.

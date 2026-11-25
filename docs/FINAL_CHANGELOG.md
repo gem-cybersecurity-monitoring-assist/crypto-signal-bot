@@ -5,8 +5,8 @@
 
 ## Summary
 
-- **580+ backend tests** (up from ~247 at start of remediation), **97 frontend tests** (up from 55)
-- **100+ new backend tests** added across venue registry, broker normalizer, coordinator, config loader, websocket manager, state machine, P&L engine, API contracts
+- **600+ backend tests** (up from ~247 at start of remediation), **97 frontend tests** (up from 55)
+- **123+ new backend tests** added across venue registry, broker normalizer, coordinator, config loader, websocket manager, state machine, P&L engine, API contracts, execution router, portfolio persistence
 - **42 new frontend component tests** added for Health, Audit, Settings, Portfolio pages
 - **1,862 lines of dead code** removed (14 orphaned legacy files)
 - **Ruff lint promoted to blocking** in CI (13 lint errors fixed)
@@ -94,7 +94,7 @@ Extracted auto-trade effect and 8 WebSocket callback handlers into `src/hooks/us
 
 Added `push` and `pull_request` triggers to `.github/workflows/ci.yml`. Both frontend build and backend test suite run on every push to main and PR.
 
-### 3.2 Expand backend test coverage (MOSTLY DONE)
+### 3.2 Expand backend test coverage (DONE)
 
 **New test files**:
 
@@ -107,8 +107,8 @@ Added `push` and `pull_request` triggers to `.github/workflows/ci.yml`. Both fro
 | `test_websocket_manager.py` | 13 | Connect/disconnect, broadcast, dead-client cleanup |
 | `test_state_machine.py` | 16 | Valid/invalid transitions, terminal states, helpers |
 | `test_pnl.py` | 12 | FIFO lot matching, partial sells, balance tracking |
-
-**Deferred**: `execution_router.py` (async mocks), `portfolio_persistence.py` (DB session mocks).
+| `test_execution_router.py` | 13 | Venue routing (exchange + MT5), error propagation, BrokerRoutedOrder normalization |
+| `test_portfolio_persistence.py` | 10 | Restore, persist, order save, DB error resilience, mode parameter |
 
 ### 3.3 Add frontend component tests (DONE)
 
@@ -231,7 +231,6 @@ Removed 1,862 lines across 14 files:
 
 ### Medium priority
 - Prediction bot integration (Phase 5.1) — service exists, needs coordinator wiring
-- Tests for execution_router and portfolio_persistence (Phase 3.2) — needs async/DB mocks
 
 ### Low priority (blocked)
 - Live adapter integration tests (Phase 7) — requires owner authorization
