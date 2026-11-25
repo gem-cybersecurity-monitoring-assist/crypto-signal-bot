@@ -14,6 +14,8 @@
 - **Backend modularized** — route extraction from app.py monolith, audit/policy/risk module restructuring
 - **8 documentation files** refreshed to match current implementation
 - **Landing page** built with feature grid and safety callout
+- **Settings page** built with server config viewer and dashboard preferences
+- **Portfolio page** built with positions table, order history, and live prices
 
 ---
 
@@ -122,15 +124,23 @@ Removed `--exit-zero` from CI ruff step.
 
 ---
 
-## Phase 4: Frontend Feature Completion (PARTIAL)
+## Phase 4: Frontend Feature Completion (MOSTLY DONE)
+
+### 4.1 Settings page (DONE)
+
+Built full `Settings.tsx` with 4 read-only server config sections (system status, risk engine, guardian status, market data) and editable dashboard preferences (risk tolerance, volatility sensitivity, position size, spread stress threshold, auto-trade toggle, sound alerts). Uses `usePersistedSettings` for localStorage persistence. All server parameters read-only per paper-mode constraints.
+
+### 4.2 Portfolio / Positions view (DONE)
+
+Built full `Portfolio.tsx` with summary stats (total equity, cash balance, position value), open positions table with live prices and 24h change from `/price` endpoint, and recent order history table with color-coded buy/sell indicators and status badges (FILLED, REJECTED, etc.). Empty states for both sections.
 
 ### 4.4 Landing page (DONE)
 
 Built polished `PublicHome.tsx` with product overview, feature grid (6 panels), paper trading callout, and safety-first messaging. Replaced minimal 28-line stub.
 
-### 4.1–4.3 (NOT STARTED)
+### 4.3 Standalone Health/Audit pages (NOT STARTED)
 
-Settings page, Positions view, and standalone Health/Audit pages remain as stubs.
+Health and Audit standalone pages remain as dashboard panels only.
 
 ---
 
@@ -181,6 +191,7 @@ Removed 1,862 lines across 14 files:
 - **`app.py`**: Removed duplicate import of `earnings_v1_router`
 - **`guardian_bot/service.py`**: Removed unused `cfg = get_risk_config()` assignments
 - **`monitoring/service.py`**: Removed unused `prev_ok` variable
+- **`test_audit_store_event_log.py`**: Fixed broken import after `logic/audit_store.py` → `audit/store.py` move
 
 ---
 
@@ -191,7 +202,7 @@ Removed 1,862 lines across 14 files:
 - Frontend component tests (Phase 3.3)
 
 ### Medium priority
-- Settings page, Positions view, standalone pages (Phase 4)
+- Standalone Health/Audit pages (Phase 4.3)
 - Prediction bot integration (Phase 5.1)
 - Worker/Python boundary documentation (Phase 5.2)
 - Tests for execution_router and portfolio_persistence (Phase 3.2)
