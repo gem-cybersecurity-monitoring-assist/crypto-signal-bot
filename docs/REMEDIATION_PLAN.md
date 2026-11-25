@@ -138,9 +138,10 @@ Goal: Align backend module layout with CLAUDE.md target architecture.
 ### 4.3 Enhance standalone pages
 **Action**: Build out standalone Health and Audit pages with more detail than the dashboard panels provide. Wire to routes.
 
-### 4.4 Improve landing page
+### 4.4 Improve landing page — DONE
 **Problem**: `PublicHome.tsx` is minimal (28 lines).
 **Action**: Build a polished landing page with product overview, features, paper trading callout.
+**Result**: Rewritten with hero, 6-card feature grid, paper-trading safety callout, integration/waitlist links, footer.
 
 ---
 
@@ -162,11 +163,11 @@ Goal: Align backend module layout with CLAUDE.md target architecture.
 All exist in `docs/` but are stale from PR #75 era:
 - [x] `ARCHITECTURE_AUDIT.md` — refreshed (this audit)
 - [x] `REMEDIATION_PLAN.md` — refreshed (this plan)
-- [ ] `DECISION_TRACE_SPEC.md` — verify against current implementation
-- [ ] `API_CONTRACTS.md` — verify against current endpoints
-- [ ] `FRONTEND_STRUCTURE.md` — update for dead code removal and current routing
+- [x] `DECISION_TRACE_SPEC.md` — refreshed, aligned with current implementation
+- [x] `API_CONTRACTS.md` — refreshed, matches current endpoint inventory
+- [x] `FRONTEND_STRUCTURE.md` — refreshed with current component inventory (18 pages, 20 components, 19 hooks)
 - [x] `BACKEND_STRUCTURE.md` — updated for current module map
-- [ ] `RUNBOOK_LOCAL.md` — verify setup instructions still work
+- [x] `RUNBOOK_LOCAL.md` — updated with integration test command and ruff flags
 - [ ] `FINAL_CHANGELOG.md` — update with all work since PR #81
 
 ---
