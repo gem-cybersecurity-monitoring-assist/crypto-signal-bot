@@ -28,8 +28,11 @@ import {
 } from '../../../exchange-contracts.ts'
 import {
   asDecimalString,
+  asSignedDecimalString,
+  compareSignedDecimal,
   compareDecimal,
   type DecimalString,
+  type SignedDecimalString,
 } from '../../../decimal.ts'
 import { normalizeProductRules } from '../../../product-rules.ts'
 
@@ -39,7 +42,7 @@ export interface BitgetV3UnifiedAccountSnapshot {
   maintenanceMarginUsd: DecimalString
   initialMarginUsd: DecimalString
   marginRatio: DecimalString
-  unrealisedPnlUsd: DecimalString
+  unrealisedPnlUsd: SignedDecimalString
   balances: readonly ExchangeAccountBalance[]
   observedAt: string
 }
@@ -52,7 +55,7 @@ export interface BitgetV3PositionSnapshot {
   size: DecimalString
   entryPrice: DecimalString
   markPrice: DecimalString
-  unrealisedPnl: DecimalString
+  unrealisedPnl: SignedDecimalString
   liquidationPrice: DecimalString | null
   marginMode: string
   leverage: DecimalString
@@ -206,7 +209,7 @@ export class BitgetV3ReadOnlyAdapter implements ReadOnlyExchangeAdapter {
       maintenanceMarginUsd: decimal(data.mmr ?? '0', 'mmr'),
       initialMarginUsd: decimal(data.imr ?? '0', 'imr'),
       marginRatio: decimal(data.mgnRatio ?? '0', 'mgnRatio'),
-      unrealisedPnlUsd: decimal(data.unrealisedPnl ?? '0', 'unrealisedPnl'),
+      unrealisedPnlUsd: asSignedDecimalString(data.unrealisedPnl ?? '0', 'unrealisedPnl'),
       balances: Object.freeze(assets.map((asset) => this.normalizeAccount(asset, observed))),
       observedAt: observed,
     }
@@ -279,8 +282,9 @@ export class BitgetV3ReadOnlyAdapter implements ReadOnlyExchangeAdapter {
     if (side !== 'long' && side !== 'short') {
       throw new ExchangeContractError('posSide', `unsupported value ${side}`)
     }
-    const liquidationRaw = optionalDecimal(data.liquidationPrice, 'liquidationPrice')
-    const zero = decimal('0', 'zero')
+    const liquidationRaw = data.liquidationPrice == null || String(data.liquidationPrice).trim() === ''
+      ? null : asSignedDecimalString(data.liquidationPrice, 'liquidationPrice')
+    const zero = asSignedDecimalString('0')
     return {
       productId: productId(data.symbol, data.baseCoin, data.quoteCoin),
       category: text(data.category ?? 'UNKNOWN', 'category'),
@@ -289,9 +293,10 @@ export class BitgetV3ReadOnlyAdapter implements ReadOnlyExchangeAdapter {
       size: decimal(data.total ?? '0', 'total'),
       entryPrice: decimal(data.avgPrice ?? '0', 'avgPrice'),
       markPrice: decimal(data.markPrice ?? '0', 'markPrice'),
-      unrealisedPnl: decimal(data.unrealisedPnl ?? '0', 'unrealisedPnl'),
+      unrealisedPnl: asSignedDecimalString(data.unrealisedPnl ?? '0', 'unrealisedPnl'),
       liquidationPrice:
-        liquidationRaw && compareDecimal(liquidationRaw, zero) > 0 ? liquidationRaw : null,
+        liquidationRaw && compareSignedDecimal(liquidationRaw, zero) > 0
+          ? asDecimalString(liquidationRaw) : null,
       marginMode: text(data.marginMode ?? 'crossed', 'marginMode'),
       leverage: decimal(data.leverage ?? '1', 'leverage'),
       createdAt: timestamp(data.createdTime ?? Date.now(), 'createdTime'),

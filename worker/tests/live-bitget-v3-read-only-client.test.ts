@@ -196,7 +196,7 @@ test('V3 client validates funding coin codes', async () => {
 test('V3 client validates position query fields', async () => {
   const client = testClient(async () => jsonResponse({}))
   await assert.rejects(client.getCurrentPositions({ category: 'nope' }), /must be one of/)
-  await assert.rejects(client.getCurrentPositions({ posSide: 'both' }), /must be long or short/)
+  await assert.rejects(client.getCurrentPositions({ category: 'USDT-FUTURES', posSide: 'both' }), /must be long or short/)
 })
 
 test('V3 read-only client rejects streaming bodies at the byte cap without buffering the remaining stream', async () => {
@@ -351,4 +351,18 @@ test('V3 order-info recovery signs only exact GET requests; unknown identity nev
   }
   assert.equal(observed.length, 2)
   assert.equal(credentialsRead, 2)
+})
+
+test('V3 positions require a permitted category before any transport call', async () => {
+  const seen: string[] = []
+  const client = testClient(async (url) => {
+    seen.push(new URL(String(url)).searchParams.get('category') ?? '')
+    return jsonResponse({code:'00000',data:{list:[]}})
+  })
+  await assert.rejects(client.getCurrentPositions(), /require a futures category/)
+  await assert.rejects(client.getCurrentPositions({ category:'SPOT' }), /require a futures category/)
+  await assert.rejects(client.request(BITGET_V3_ENDPOINTS.currentPositions, { category:'SPOT' }), /require a canonical futures category/)
+  assert.deepEqual(seen, [])
+  await client.getCurrentPositions({ category:'USDT-FUTURES' })
+  assert.deepEqual(seen, ['USDT-FUTURES'])
 })

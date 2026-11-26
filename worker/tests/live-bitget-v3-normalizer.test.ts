@@ -166,8 +166,10 @@ test('V3 position mapping captures risk fields', () => {
 })
 
 test('V3 position mapping nulls non-positive liquidation prices', () => {
-  const position = adapter.normalizePosition({ ...POSITION_ROW_FIXTURE, liquidationPrice: '0' })
-  assert.equal(position.liquidationPrice, null)
+  for (const liquidationPrice of ['0', '-1', '-0.01']) {
+    const position = adapter.normalizePosition({ ...POSITION_ROW_FIXTURE, liquidationPrice })
+    assert.equal(position.liquidationPrice, null)
+  }
 })
 
 test('V3 position list rejects non-array lists', () => {
@@ -187,4 +189,12 @@ test('V3 order and fill normalization are unsupported by construction', () => {
     () => adapter.normalizeFill({}),
     (error: unknown) => error instanceof ExchangeContractError,
   )
+})
+
+test('V3 account and position preserve negative unrealised PnL without allowing negative position size', () => {
+  const account = adapter.normalizeUnifiedAccount({ ...ASSETS_FIXTURE,
+    data: { ...ASSETS_FIXTURE.data, unrealisedPnl: '-1.25' } }, OBSERVED_AT)
+  assert.equal(account.unrealisedPnlUsd, '-1.25')
+  assert.equal(adapter.normalizePosition({ ...POSITION_ROW_FIXTURE, unrealisedPnl: '-1.25' }).unrealisedPnl, '-1.25')
+  assert.throws(() => adapter.normalizePosition({ ...POSITION_ROW_FIXTURE, total: '-1' }))
 })

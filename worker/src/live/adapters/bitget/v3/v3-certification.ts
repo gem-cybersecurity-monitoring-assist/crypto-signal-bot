@@ -182,13 +182,27 @@ export async function runBitgetV3ReadOnlyCertification(
       }
     }),
     timed('POSITION_CONTRACT', async () => {
-      const raw = await input.client.getCurrentPositions()
-      positions = adapter.normalizePositionList(raw)
+      const categories = ['USDT-FUTURES', 'COIN-FUTURES', 'USDC-FUTURES'] as const
+      const scoped = await Promise.all(categories.map(async category => {
+        const raw = await input.client.getCurrentPositions({ category })
+        if (!raw || typeof raw !== 'object' || (raw as Record<string, unknown>).code !== '00000') {
+          throw new Error('Bitget UTA position response unavailable')
+        }
+        const rows = adapter.normalizePositionList(raw)
+        if (rows.some(row => row.category !== category)) {
+          throw new Error('Bitget UTA position response category mismatch')
+        }
+        const keys = rows.map(row => row.symbol + ':' + row.side + ':' + row.marginMode)
+        if (new Set(keys).size !== keys.length) throw new Error('Bitget UTA ambiguous position rows')
+        return rows
+      }))
+      positions = Object.freeze(scoped.flat())
       positionCount = positions.length
       return {
         reason: null,
         evidence: {
           positionCount,
+          categories: [...categories],
           productIds: positions.map((position) => position.productId),
         },
       }

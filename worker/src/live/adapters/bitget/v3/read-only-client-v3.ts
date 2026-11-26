@@ -224,6 +224,17 @@ export class BitgetV3ReadOnlyClient {
   ): Promise<unknown> {
     assertBitgetV3ReadOnlyRequest('GET', endpoint)
     validateQuery(query)
+    if (endpoint === BITGET_V3_ENDPOINTS.currentPositions) {
+      const category = assertBitgetV3Category(query.category)
+      if (!['USDT-FUTURES', 'COIN-FUTURES', 'USDC-FUTURES'].includes(category)
+          || category !== query.category) {
+        throw new TypeError('Bitget V3 positions require a canonical futures category')
+      }
+      if (Object.keys(query).some(key => !['category', 'symbol', 'posSide'].includes(key))) {
+        throw new TypeError('Unsupported current-position query field')
+      }
+      if (query.posSide !== undefined) assertBitgetV3PositionSide(query.posSide)
+    }
     const queryString = buildBitgetV3Query(query)
     const url = new URL(endpoint, BITGET_V3_API_ORIGIN)
     if (url.origin !== BITGET_V3_API_ORIGIN || url.pathname !== endpoint) {
@@ -396,7 +407,6 @@ export class BitgetV3ReadOnlyClient {
       category?: unknown
       symbol?: unknown
       posSide?: unknown
-      limit?: unknown
     }> = {},
   ): Promise<unknown> {
     const normalized: Record<string, string | number> = {}
@@ -409,8 +419,8 @@ export class BitgetV3ReadOnlyClient {
     if (query.posSide !== undefined && query.posSide !== null && query.posSide !== '') {
       normalized.posSide = assertBitgetV3PositionSide(query.posSide)
     }
-    if (query.limit !== undefined && query.limit !== null && query.limit !== '') {
-      normalized.limit = query.limit as string | number
+    if (!normalized.category || !['USDT-FUTURES', 'COIN-FUTURES', 'USDC-FUTURES'].includes(String(normalized.category))) {
+      throw new TypeError('Bitget V3 positions require a futures category')
     }
     return this.request(BITGET_V3_ENDPOINTS.currentPositions, normalized)
   }

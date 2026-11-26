@@ -119,6 +119,13 @@ const INSTRUMENTS_FIXTURE = {
   ],
 }
 
+function scopedPositions(query?: Readonly<Record<string, unknown>>) {
+  if (!query || !['USDT-FUTURES','COIN-FUTURES','USDC-FUTURES'].includes(String(query.category))) {
+    throw new Error('missing or invalid fixture position category')
+  }
+  return query.category === 'USDT-FUTURES' ? POSITIONS_FIXTURE : { code:'00000',data:{list:[]} }
+}
+
 function mockClient(overrides: Partial<Record<string, unknown>> = {}): BitgetV3ReadOnlyCertificationClient {
   return {
     async verifyReadOnlyPermissions() {
@@ -130,8 +137,8 @@ function mockClient(overrides: Partial<Record<string, unknown>> = {}): BitgetV3R
     async getAccountAssets() {
       return overrides.assets ?? ASSETS_FIXTURE
     },
-    async getCurrentPositions() {
-      return overrides.positions ?? POSITIONS_FIXTURE
+    async getCurrentPositions(query) {
+      return overrides.positions ?? scopedPositions(query)
     },
     async getInstruments() {
       return overrides.instruments ?? INSTRUMENTS_FIXTURE
@@ -237,7 +244,7 @@ test('invalid UTA API permissions prevent every account-data call, including con
       throw new Error('invalid or write-enabled API key')
     },
     async getAccountAssets() { called.push('assets'); return ASSETS_FIXTURE },
-    async getCurrentPositions() { called.push('positions'); return POSITIONS_FIXTURE },
+    async getCurrentPositions(query) { called.push('positions'); return scopedPositions(query) },
     async getInstruments() { called.push('instruments'); return INSTRUMENTS_FIXTURE },
     async getOrderHistory() { called.push('history'); return ORDER_HISTORY_FIXTURE },
   }
@@ -271,7 +278,7 @@ test('fabricated client permissions fail closed before any balance or order-hist
       ...mockClient(),
       async verifyReadOnlyPermissions() { return bad as never },
       async getAccountAssets() { reads++; return ASSETS_FIXTURE },
-      async getCurrentPositions() { reads++; return POSITIONS_FIXTURE },
+      async getCurrentPositions(query) { reads++; return scopedPositions(query) },
       async getInstruments() { reads++; return INSTRUMENTS_FIXTURE },
       async getOrderHistory() { reads++; return ORDER_HISTORY_FIXTURE },
     }
@@ -292,7 +299,7 @@ test('valid permission verification precedes all UTA account reads', async () =>
       return assertBitgetV3ReadOnlyAuthorities(SETTINGS_FIXTURE, INFO_FIXTURE)
     },
     async getAccountAssets() { called.push('assets'); return ASSETS_FIXTURE },
-    async getCurrentPositions() { called.push('positions'); return POSITIONS_FIXTURE },
+    async getCurrentPositions(query) { called.push('positions'); return scopedPositions(query) },
     async getInstruments() { called.push('instruments'); return INSTRUMENTS_FIXTURE },
     async getOrderHistory() { called.push('history'); return ORDER_HISTORY_FIXTURE },
   }
@@ -390,4 +397,25 @@ test('Spot history evidence binds sampled identities, not just the number of row
   const a = await run(['fixture-A', 'fixture-B'])
   assert.notEqual(a, await run(['fixture-C', 'fixture-D']))
   assert.equal(a, await run(['fixture-B', 'fixture-A']))
+})
+
+test('UTA position observation explicitly covers all futures categories and rejects cross-category rows', async () => {
+  const categories: unknown[] = []
+  const client: BitgetV3ReadOnlyCertificationClient = {
+    ...mockClient(),
+    async getCurrentPositions(query) {
+      categories.push(query?.category)
+      return scopedPositions(query)
+    },
+  }
+  const good = await runBitgetV3ReadOnlyCertification({ ...baseInput(), client })
+  assert.equal(good.status, 'PASSED')
+  assert.equal(good.positionCount, 1)
+  assert.deepEqual(categories.sort(), ['COIN-FUTURES','USDC-FUTURES','USDT-FUTURES'])
+  const wrong = await runBitgetV3ReadOnlyCertification({ ...baseInput(), client: {
+    ...client, async getCurrentPositions() { return POSITIONS_FIXTURE },
+  } })
+  assert.equal(wrong.checks.find(c=>c.name==='POSITION_CONTRACT')?.status, 'FAIL')
+  assert.equal(wrong.positionCount, 0)
+  assert.equal(wrong.executionAllowed, false)
 })
