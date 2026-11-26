@@ -197,7 +197,8 @@ export function useBackendWebSocket(options: UseBackendWebSocketOptions = {}): W
       attemptRef.current = 0; // Reset backoff on successful connect
       setConnected(true);
       lastPingRef.current = Date.now();
-      if (cbRef.current.accessToken) ws.send(JSON.stringify({ type: 'authenticate_orders',
+      // Public messages may use a development socket, but never send bearer tokens over ws:.
+      if (cbRef.current.accessToken && new URL(ws.url).protocol === 'wss:') ws.send(JSON.stringify({ type: 'authenticate_orders',
         access_token: cbRef.current.accessToken, after_sequence: eventCursorRef.current }));
     };
 

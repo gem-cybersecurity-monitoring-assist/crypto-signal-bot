@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import test from 'node:test'
-import { inspectReviewedDeploymentResources, reviewedResourceConfig,
+import { inspectReviewedDeploymentResources, reviewedResourceConfig, reviewedCoordinatorConfig,
   validateReviewedResourceIsolation } from '../../scripts/verify-reviewed-deployment-resources.mjs'
 const account='d944e40760494a6843e521cd57c15dfd'
 const dbId='12345678-1234-1234-1234-123456789abc'
@@ -162,14 +162,15 @@ test('isolated migration preparation excludes production paths and verifies empt
   const db=new DatabaseSync(':memory:')
   try{
     db.exec('PRAGMA foreign_keys=ON;CREATE TABLE d1_migrations (name TEXT PRIMARY KEY)')
-    for(let pass=0;pass<2;pass++)for(const name of names){
-      if(db.prepare('SELECT name FROM d1_migrations WHERE name=?').get(name))continue
+    for(let pass=0;pass<2;pass++)for(const file of files){
+      if(db.prepare('SELECT name FROM d1_migrations WHERE name=?').get(file.target))continue
       db.exec('BEGIN')
-      try{db.exec(renderReviewedMigration(fs.readFileSync(new URL(name,directory),'utf8')))
-        db.prepare('INSERT INTO d1_migrations VALUES (?)').run(name);db.exec('COMMIT')
+      try{db.exec(renderReviewedMigration(fs.readFileSync(new URL(file.source,directory),'utf8')))
+        db.prepare('INSERT INTO d1_migrations VALUES (?)').run(file.target);db.exec('COMMIT')
       }catch(error){db.exec('ROLLBACK');throw error}
     }
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM d1_migrations').get()!.n,31)
+    assert.deepEqual(db.prepare('SELECT name FROM d1_migrations ORDER BY name').all().map(r=>r.name),files.map(f=>f.target).sort())
     assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE name='live_partial_fill_reservation_releases'").get())
     assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name='managed_users'").get(),undefined)
   }finally{db.close()}
@@ -217,4 +218,33 @@ test('coordinator-only artifact keeps the same namespace and exposes no public c
   assert.match(text,/tag = "v1"/)
   assert.match(text,/new_sqlite_classes = \["ExchangeAccountCoordinator"\]/)
   assert.doesNotMatch(text,/secrets_store_secrets|kv_namespaces|r2_buckets|^routes\s*=|^crons\s*=/m)
+})
+
+test('privacy checks reject route table, singular route, trigger and alternate environment declarations',()=>{
+  const candidate=fs.readFileSync(new URL('../../wrangler.live-candidate.toml',import.meta.url),'utf8')
+  const coordinator=fs.readFileSync(new URL('../../wrangler.reviewed-coordinator.toml',import.meta.url),'utf8')
+  const gateway=fs.readFileSync(new URL('../../wrangler.reviewed-operations.toml',import.meta.url),'utf8')
+  for(const suffix of ['\n[[routes]]\npattern="example.test"\ncustom_domain=true\n',
+    '\nroute="example.test/*"\n','\n[triggers]\ncrons=["* * * * *"]\n','\n[env.preview]\nworkers_dev=true\n']){
+    assert.equal(reviewedResourceConfig(candidate,gateway+suffix).gatewayPrivate,false)
+    assert.equal(reviewedCoordinatorConfig(coordinator+suffix,gateway).gatewayPrivate,false)
+    assert.equal(reviewedCoordinatorConfig(coordinator,gateway+suffix).gatewayPrivate,false)
+  }
+})
+
+test('deployed D1 binding accepts documented database_id and rejects inconsistent metadata',async()=>{
+  for(const mismatch of [false,true]){
+    const run=()=>inspectReviewedDeploymentResources(config,{environment,requireCoordinator:true,
+      fetcher:async(url:string)=>{
+        const result:any=fixture(url)
+        if(url.endsWith('/settings')){
+          const binding=result.bindings.find((b)=>b.name==='DB')
+          delete binding.id
+          binding.database_id=mismatch?'wrong-db':dbId
+        }
+        return Response.json({success:true,result})
+      }})
+    if(mismatch)await assert.rejects(run,/BINDING_UNVERIFIED/)
+    else assert.equal((await run()).deployedCoordinator,true)
+  }
 })

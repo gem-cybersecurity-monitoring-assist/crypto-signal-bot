@@ -11,6 +11,19 @@ const production = {
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const hex = /^[a-f0-9]{32}$/;
 const fail = (code) => { throw new Error(code); };
+// The checked-in private templates deliberately allow only simple TOML.
+// Route/trigger table forms are not private service bindings.
+function noPublicRouteDeclarations(text) {
+  return !/^\s*(?:routes|route|crons)\s*=/m.test(text)
+    && !/^\s*\[+\s*(?:routes?|triggers)(?:\b|\])/m.test(text)
+    && !/^\s*\[+\s*env(?:\b|\])/m.test(text);
+}
+function matchingD1Binding(binding, expected) {
+  return binding.name === 'DB' && binding.type === 'd1'
+    && (binding.database_id ?? binding.id) === expected
+    && (binding.database_id === undefined || binding.id === undefined || binding.database_id === binding.id);
+}
+
 function field(text, key) {
   const matches = [...text.matchAll(new RegExp(`^${key}\\s*=\\s*"([^"\\r\\n]*)"\\s*(?:#.*)?$`, 'gm'))];
   if (matches.length !== 1) return fail('CANDIDATE_RESOURCE_CONFIG_AMBIGUOUS');
@@ -32,7 +45,7 @@ export function reviewedResourceConfig(candidateText, gatewayText) {
     gatewayPrivate: field(gatewayText, 'main') === 'worker/src/index_reviewed_operations.ts'
       && /^workers_dev\s*=\s*false\s*$/m.test(gatewayText)
       && /^preview_urls\s*=\s*false\s*$/m.test(gatewayText)
-      && !/^\s*(routes|route|crons)\s*=/m.test(gatewayText)
+      && noPublicRouteDeclarations(gatewayText)
       && !/\[\[migrations\]\]|new_sqlite_classes/.test(gatewayText),
   };
 }
@@ -47,7 +60,7 @@ export function reviewedCoordinatorConfig(coordinatorText, gatewayText) {
     gatewayPrivate: field(gatewayText,'main') === 'worker/src/index_reviewed_operations.ts'
       && field(coordinatorText,'main') === 'worker/src/index_reviewed_coordinator.ts'
       && [coordinatorText,gatewayText].every((text)=> /^workers_dev\s*=\s*false\s*$/m.test(text)
-        && /^preview_urls\s*=\s*false\s*$/m.test(text) && !/^\s*(routes|route|crons)\s*=/m.test(text)),
+        && /^preview_urls\s*=\s*false\s*$/m.test(text) && noPublicRouteDeclarations(text)),
   };
 }
 
@@ -126,7 +139,7 @@ export async function inspectReviewedDeploymentResources(config, { environment =
     if (!coordinator || coordinator.type !== 'durable_object_namespace'
       || coordinator.class_name !== 'ExchangeAccountCoordinator' || !coordinator.namespace_id
       || coordinator.script_name && coordinator.script_name !== config.candidateWorker
-      || !bindings.some((b) => b.name === 'DB' && b.type === 'd1' && b.id === config.dbId)) {
+      || !bindings.some((b) => matchingD1Binding(b, config.dbId))) {
       return fail('DEPLOYED_COORDINATOR_BINDING_UNVERIFIED');
     }
   }
@@ -142,7 +155,7 @@ export async function inspectReviewedDeploymentResources(config, { environment =
       || imported.class_name !== 'ExchangeAccountCoordinator'
       || imported.script_name !== config.candidateWorker
       || imported.namespace_id !== coordinator.namespace_id
-      || !bindings.some((b)=>b.name === 'DB' && b.type === 'd1' && b.id === config.dbId)
+      || !bindings.some((b)=>matchingD1Binding(b, config.dbId))
       || !secretBound(bindings,'CANDIDATE_ACCOUNTING_TOKEN')
       || !secretBound(worker.bindings,'CANDIDATE_ACCOUNTING_TOKEN')) return fail('DEPLOYED_GATEWAY_BINDINGS_UNVERIFIED');
     if ([candidateUrls,gatewayUrls].some((s)=>s.enabled !== false || s.previews_enabled !== false)) {

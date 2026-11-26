@@ -105,7 +105,7 @@ VITE_DEMO_MODE=true
 Then run the Worker and frontend in separate terminals:
 
 ```bash
-cd worker && npm run dev:local
+cd worker && npm run migrate:paper:003:local && npm run dev:local
 npm run dev
 ```
 

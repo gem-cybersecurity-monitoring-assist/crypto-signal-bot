@@ -16,7 +16,7 @@ export function privateCertificationConfig(text) {
   }
   // Strip comments before checking assignment/table names, not credential values.
   const active = text.replace(/^\s*#.*$/gm,'');
-  if (/^\s*routes\s*=|^\s*\[+\s*(?:routes|triggers|d1_databases|kv_namespaces|r2_buckets|durable_objects|services|queues)\b/m.test(active)
+  if (/^\s*routes?\s*=|^\s*\[+\s*(?:routes?|triggers|env|d1_databases|kv_namespaces|r2_buckets|durable_objects|services|queues)\b/m.test(active)
     || /BITGET_TRADE_|BITGET_WITHDRAW|^\s*CERTIFICATION_RUNNER_TOKEN\s*=/m.test(active)) {
     throw new Error('PRIVATE_CERTIFICATION_CONFIG_INVALID');
   }
