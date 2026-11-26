@@ -26,6 +26,7 @@ export class ReplayFixture extends PortfolioState {
         return Response.json(await ledger.apply(await request.json<ReplayFill>()))
       }
       if (path==='/halt') return Response.json(await this.ledger.halt('fixture-portfolio'))
+      if (path==='/outbox') return Response.json(await this.ledger.outboxPage(Number(new URL(request.url).searchParams.get('after') ?? '0')))
       if (path==='/snapshot') return Response.json(await this.ledger.snapshot())
       return super.fetch()
     } catch {

@@ -322,3 +322,14 @@ Worker: https://crypto-signal-bot-api.analyzer-d94.workers.dev
   execution/exit accounting and state migration, shared Guardian and
   outbox projection. Replay-only storage is not production authority.
 - [ ] Complete external access/certification and independent release review.
+
+## Isolated portfolio outbox projection checkpoint
+- [x] Enforce exact replay accounting conservation and contiguous bounded
+  outbox reads; reject missing or corrupted evidence.
+- [x] Connect local Durable Object replay to immutable idempotent D1 read
+  model; verify outage recovery, conflicts and duplicate deliveries.
+- [x] Verify 140 Worker contracts and 721 foundation tests, build and safety.
+- [ ] Finish shared risk/Guardian authority, authentic market event inputs,
+  market valuation, execution/exit policy, production state migration and
+  authenticated asynchronous projection transport. Local replay is not
+  production authority or external certification.

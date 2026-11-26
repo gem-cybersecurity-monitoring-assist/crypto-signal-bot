@@ -434,3 +434,29 @@ peak equity/drawdown, latency and property acceptance, outbox consumer
 and projections; production authority migration, provider certification
 and independent review. This isolated core does not complete Phase 4
 or change the required phase rollout order.
+
+## Isolated portfolio outbox projection and accounting conservation
+The isolated replay state owner now records its opening cash and verifies
+cash + protected reserve + remaining FIFO inventory cost = opening cash +
+realized P&L on state reads and commits. It exposes bounded non-destructive
+outbox pages by contiguous version; absent evidence is rejected. A new
+isolated D1 projection uses a guarded atomic insert, immutable event records
+and canonical content hashes for idempotency and conflict detection. The
+local runtime test connects actual SQLite Durable Object outbox evidence
+to local D1, verifies duplicate delivery, delayed/out-of-order replay,
+conflicting records, projection outage with source commit preserved and
+recovery. Three additional contract tests verify exact conservation across
+60 fractional hypothetical fills, corrupted state rejection and missing
+outbox detection. Book value is not market equity or unrealized P&L.
+The projection trusts the local test caller; no authenticated queue
+transport, production namespace, migration or consumer is enabled.
+Validation: 140 Worker contract/fast-path tests and 721 foundation tests
+passed, including actual local Durable Object/D1 integration; Worker
+TypeScript build and paper, regulated foundation, certification safety
+checks passed. Previous CI 45768469278 succeeded. Production attestation
+healthy. All changes remain isolated replay engineering; no external
+provider operation, production deployment, real funds or permissions change.
+Still required: shared authoritative Guardian and risk inputs, authentic
+market event stream, production portfolio ownership and execution policy,
+market equity/drawdown, async authenticated projection transport and lag
+metrics, provider access/certification and independent release review.

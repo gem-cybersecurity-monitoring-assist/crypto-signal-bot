@@ -102,3 +102,40 @@ describe('isolated atomic portfolio replay', () => {
     expect((await obj.fetch()).status).toBe(403)
   })
 })
+
+describe('replay accounting conservation and outbox evidence', () => {
+  it('holds exact conservation across repeated fractional FIFO closes and losses', async () => {
+    const {ledger}=await setup()
+    let version=0
+    for(let i=0;i<20;i++){
+      await ledger.apply(event({eventId:'cycle-buy-'+i,expectedVersion:version++,quantity:'0.123456789',simulatedPrice:'100.123456789',simulatedFee:'0.001'}))
+      await ledger.apply(event({eventId:'cycle-partial-'+i,expectedVersion:version++,side:'SELL',quantity:'0.023456789',simulatedPrice:i%2?'90':'120',simulatedFee:'0.0001'}))
+      await ledger.apply(event({eventId:'cycle-close-'+i,expectedVersion:version++,side:'SELL',quantity:'0.1',simulatedPrice:'110',simulatedFee:'0.0002'}))
+    }
+    const final=await ledger.snapshot()
+    expect(final?.version).toBe(60)
+    expect(final?.positions).toEqual([])
+    const {assertReplayConservation}=await import('../../src/durable-objects/replay-accounting-invariant')
+    expect(()=>assertReplayConservation(final!)).not.toThrow()
+    const first=await ledger.outboxPage(0)
+    const last=await ledger.outboxPage(first.length)
+    expect(first.length).toBe(32)
+    expect(last.length).toBe(28)
+  })
+  it('detects corruption before any later write or outbox publication', async () => {
+    const {ledger,storage}=await setup()
+    await ledger.apply(event())
+    const state=storage.values.get('paper-replay:state') as Record<string,unknown>
+    state.cash='799'
+    await expect(ledger.snapshot()).rejects.toThrow('conservation failed')
+    await expect(ledger.apply(event({eventId:'next',expectedVersion:1}))).rejects.toThrow('conservation failed')
+    await expect(ledger.outboxPage(0)).rejects.toThrow('conservation failed')
+    expect(storage.values.size).toBe(3)
+  })
+  it('rejects missing outbox events instead of skipping versions', async () => {
+    const {ledger,storage}=await setup()
+    await ledger.apply(event())
+    storage.values.delete('paper-replay:outbox:1')
+    await expect(ledger.outboxPage(0)).rejects.toThrow('outbox integrity failure')
+  })
+})

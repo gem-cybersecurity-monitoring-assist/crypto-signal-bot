@@ -3,6 +3,7 @@
  * No provider calls, funds, risk allocation, or external projection writes.
  */
 import { canonicalHash } from '../live/canonical-json.ts'
+import { assertReplayConservation } from './replay-accounting-invariant.ts'
 import {
   asDecimalString as decimal, asSignedDecimalString as signed,
   addDecimal, addSignedDecimal, subtractDecimal, subtractNonNegativeDecimal,
@@ -15,6 +16,7 @@ type Position = { symbol: string; lots: Lot[] }
 export type PortfolioSnapshot = {
   portfolioId: string
   version: number
+  initialCash: DecimalString
   cash: DecimalString
   protectedReserve: DecimalString
   realizedPnl: SignedDecimalString
@@ -32,14 +34,17 @@ export type ReplayFill = {
   simulatedPrice: string
   simulatedFee: string
 }
-type Receipt = {
+export type ReplayReceipt = {
   id: string; inputHash: string; version: number
   portfolioId: string; eventId: string; realizedPnl: SignedDecimalString
   state: PortfolioSnapshot
   executionAuthorized: false
   providerMutationAllowed: false
 }
-type Result = Receipt & { replayed: boolean }
+type Result = ReplayReceipt & { replayed: boolean }
+export type ReplayOutboxEvent =
+  | {type: 'replay_fill'; receipt: ReplayReceipt}
+  | {type: 'replay_halted'; state: PortfolioSnapshot; executionAuthorized: false}
 type TransactionStore = Pick<DurableObjectStorage, 'transaction'>
 const ZERO = decimal('0')
 const ONE_QUARTER = decimal('0.25')
@@ -93,9 +98,10 @@ export class PortfolioReplayLedger {
     return this.storage.transaction(async tx => {
       if (await tx.get(STATE)) throw new Error('Replay portfolio already initialized')
       const state: PortfolioSnapshot = {
-        portfolioId: id, version: 0, cash, protectedReserve: ZERO,
+        portfolioId: id, version: 0, initialCash: cash, cash, protectedReserve: ZERO,
         realizedPnl: signed('0'), positions: [], halted: false,
       }
+      assertReplayConservation(state)
       await tx.put(STATE, state)
       return state
     })
@@ -104,8 +110,33 @@ export class PortfolioReplayLedger {
   async snapshot(): Promise<PortfolioSnapshot | null> {
     return this.storage.transaction(async tx => {
       const state = await tx.get<PortfolioSnapshot>(STATE) ?? null
-      if (state) this.assertScope(state.portfolioId)
+      if (state) { this.assertScope(state.portfolioId); assertReplayConservation(state) }
       return state
+    })
+  }
+
+  /** Non-destructive replay reads. Never acknowledge or delete source evidence. */
+  async outboxPage(afterVersion: number, limit = 32): Promise<ReplayOutboxEvent[]> {
+    if (!Number.isSafeInteger(afterVersion) || afterVersion < 0 ||
+        !Number.isSafeInteger(limit) || limit < 1 || limit > 32) throw new TypeError('Invalid outbox page')
+    return this.storage.transaction(async tx => {
+      const state = await tx.get<PortfolioSnapshot>(STATE)
+      if (!state) throw new Error('Replay portfolio not initialized')
+      this.assertScope(state.portfolioId)
+      assertReplayConservation(state)
+      if (afterVersion > state.version) throw new Error('Replay cursor ahead of owner')
+      const result: ReplayOutboxEvent[] = []
+      for (let version = afterVersion + 1; version <= state.version && result.length < limit; version++) {
+        const event = await tx.get<ReplayOutboxEvent>('paper-replay:outbox:' + version)
+        const snapshot = event?.type === 'replay_fill' ? event.receipt.state :
+          event?.type === 'replay_halted' ? event.state : null
+        if (!event || !snapshot || snapshot.version !== version || snapshot.portfolioId !== state.portfolioId) {
+          throw new Error('Replay outbox integrity failure')
+        }
+        assertReplayConservation(snapshot)
+        result.push(event)
+      }
+      return result
     })
   }
 
@@ -115,7 +146,9 @@ export class PortfolioReplayLedger {
     return this.storage.transaction(async tx => {
       const state = await tx.get<PortfolioSnapshot>(STATE)
       if (!state || state.portfolioId !== identifier(portfolioId)) throw new Error('Replay portfolio mismatch')
+      assertReplayConservation(state)
       if (state.halted) return state
+      if (!Number.isSafeInteger(state.version + 1)) throw new Error('Replay version exhausted')
       const next = { ...state, halted: true, version: state.version + 1 }
       await tx.put(STATE, next)
       await tx.put('paper-replay:outbox:' + next.version, { type: 'replay_halted', state: next, executionAuthorized: false })
@@ -132,9 +165,11 @@ export class PortfolioReplayLedger {
     return this.storage.transaction(async tx => {
       const state = await tx.get<PortfolioSnapshot>(STATE)
       if (!state || state.portfolioId !== event.portfolioId) throw new Error('Replay portfolio mismatch')
-      const existing = await tx.get<Receipt>(receiptKey)
+      assertReplayConservation(state)
+      const existing = await tx.get<ReplayReceipt>(receiptKey)
       if (existing) {
         if (existing.inputHash !== inputHash) throw new Error('Replay event identity conflict')
+        assertReplayConservation(existing.state)
         return { ...existing, replayed: true }
       }
       if (state.halted) throw new Error('Replay portfolio halted')
@@ -184,7 +219,8 @@ export class PortfolioReplayLedger {
         next.protectedReserve = addDecimal(next.protectedReserve, transfer)
         next.cash = addDecimal(next.cash, subtractNonNegativeDecimal(proceeds, transfer))
       }
-      const receipt: Receipt = {
+      assertReplayConservation(next)
+      const receipt: ReplayReceipt = {
         id, inputHash, version: next.version, portfolioId: next.portfolioId,
         eventId: event.eventId, realizedPnl: pnl, state: next,
         executionAuthorized: false, providerMutationAllowed: false,
