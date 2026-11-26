@@ -333,3 +333,15 @@ Worker: https://crypto-signal-bot-api.analyzer-d94.workers.dev
   market valuation, execution/exit policy, production state migration and
   authenticated asynchronous projection transport. Local replay is not
   production authority or external certification.
+
+## Integrated valuation and existing paper service corrections
+- [x] Implement atomic hypothetical replay valuation, peak/drawdown latch
+  and local immutable projection; verify continuous sequence gate.
+- [x] Correct existing Python paper portfolio fail-open risk, stale price,
+  partial sale fee/quantity, marked equity, unavailable read paths and
+  local halt preservation; eliminate fabricated executor capital.
+- [x] Verify 774 backend, 149 Worker contract and 721 foundation tests;
+  local DO/D1 integration, lint, audit, build and safety checks passed.
+- [ ] Complete legacy durable accounting/restore reconciliation and
+  shared authoritative Guardian/risk/event integration. No authority
+  migration or production enablement until remaining acceptance gates.

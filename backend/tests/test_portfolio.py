@@ -5,6 +5,7 @@ Uses unittest.mock to avoid live price calls.
 from __future__ import annotations
 
 import asyncio
+import time
 from decimal import Decimal
 from unittest.mock import AsyncMock, patch
 
@@ -29,7 +30,14 @@ def _mock_price(value: float):
     """Patch get_price to return a fake snapshot."""
     snap = AsyncMock()
     snap.price = Decimal(str(value))
-    return AsyncMock(return_value=snap)
+    snap.stale = False
+    snap.market_data_mode = "paper_live"
+    snap.source = "fixture"
+    snap.fetched_at = int(time.time())
+    async def by_symbol(symbol):
+        snap.symbol = symbol
+        return snap
+    return AsyncMock(side_effect=by_symbol)
 
 
 def run(coro):
@@ -252,3 +260,93 @@ class TestPortfolioSummary:
                 return await get_portfolio_summary()
         s = run(_check())
         assert s["trade_count"] == 1   # 1 SELL = 1 closed trade
+
+
+class TestPortfolioSafetyAndValuation:
+    def test_risk_exception_never_creates_fill(self):
+        with patch.object(svc, "get_price", _mock_price(100)), patch.object(
+            svc, "_evaluate_order", AsyncMock(side_effect=RuntimeError("risk unavailable"))
+        ):
+            order = run(submit_order("ETHUSD", "BUY", "MARKET", 1))
+        assert order.status == "CANCELLED"
+        assert not svc._trades
+        assert svc._cash == STARTING_CASH
+
+    @pytest.mark.parametrize("mode", ["stale", "cache", "wrong_symbol", "expired"])
+    def test_invalid_snapshot_never_creates_fill(self, mode):
+        async def bad(symbol):
+            snap = await _mock_price(100)(symbol)
+            if mode == "stale":
+                snap.stale = True
+            elif mode == "cache":
+                snap.source = "cache:1s_old"
+            elif mode == "wrong_symbol":
+                snap.symbol = "OTHER"
+            else:
+                snap.fetched_at -= 61
+            return snap
+        with patch.object(svc, "get_price", bad):
+            order = run(submit_order("ETHUSD", "BUY", "MARKET", 1))
+        assert order.status == "CANCELLED"
+        assert not svc._trades
+
+    def test_exact_equity_and_unrealized_pnl_use_same_observation(self):
+        with patch.object(svc, "get_price", _mock_price(100)):
+            run(submit_order("ETHUSD", "BUY", "MARKET", 2))
+        with patch.object(svc, "get_price", _mock_price(120)) as price:
+            summary = run(get_portfolio_summary())
+        assert summary["cash_balance"] == 9799.8
+        assert summary["equity"] == 10039.8
+        assert summary["total_unrealized_pnl"] == 40
+        assert summary["total_realized_pnl"] == -0.2
+        assert summary["drawdown_pct"] == 0
+        assert price.await_count == 1
+
+    def test_partial_sale_records_actual_qty_and_fee(self):
+        with patch.object(svc, "get_price", _mock_price(100)):
+            run(submit_order("ETHUSD", "BUY", "MARKET", 1))
+        with patch.object(svc, "get_price", _mock_price(120)):
+            order = run(submit_order("ETHUSD", "SELL", "MARKET", 2))
+            summary = run(get_portfolio_summary())
+        assert order.qty == Decimal("1")
+        assert svc._trades[-1].qty == Decimal("1")
+        assert svc._trades[-1].fee == Decimal("0.12")
+        assert summary["cash_balance"] == 10019.78
+        assert summary["total_realized_pnl"] == 19.78
+
+    def test_missing_mark_is_unavailable_not_zero_inventory(self):
+        with patch.object(svc, "get_price", _mock_price(100)):
+            run(submit_order("ETHUSD", "BUY", "MARKET", 1))
+        with patch.object(svc, "get_price", AsyncMock(side_effect=RuntimeError("offline"))):
+            with pytest.raises(svc.PortfolioValuationUnavailable):
+                asyncio.run(get_portfolio_summary())
+
+    def test_limit_is_rechecked_at_actual_fill_price_and_risk(self):
+        with patch.object(svc, "get_price", _mock_price(110)):
+            order = run(submit_order("ETHUSD", "BUY", "LIMIT", 1, price=100))
+            run(svc._fill_order(order))
+        assert order.status == "PENDING"
+        with patch.object(svc, "get_price", _mock_price(99)), patch.object(
+            svc, "_evaluate_order", AsyncMock(side_effect=RuntimeError("risk unavailable"))
+        ):
+            run(svc._fill_order(order))
+        assert order.status == "CANCELLED"
+        assert not svc._trades
+
+    def test_cancel_during_risk_check_cannot_fill(self):
+        async def risk(**kwargs):
+            order = next(iter(svc._orders.values()))
+            order.status = "CANCELLED"
+            from backend.services.risk_gate.service import RiskGateDecision
+            return RiskGateDecision(True, 1, 1, 1, False, [], [], [], 0)
+        with patch.object(svc, "get_price", _mock_price(100)), patch.object(svc, "_evaluate_order", risk):
+            order = run(submit_order("ETHUSD", "BUY", "MARKET", 1))
+        assert order.status == "CANCELLED"
+        assert not svc._trades
+
+    def test_already_filled_order_cannot_fill_again(self):
+        with patch.object(svc, "get_price", _mock_price(100)):
+            order = run(submit_order("ETHUSD", "BUY", "MARKET", 1))
+            run(svc._fill_order(order))
+        assert len(svc._trades) == 1
+        assert svc._cash == Decimal("9899.9")

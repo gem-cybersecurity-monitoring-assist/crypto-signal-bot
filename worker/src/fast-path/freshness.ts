@@ -29,7 +29,7 @@ export function authorizeMarketAction(input: MarketAuthorizationInput): MarketAu
     return reject('NON_EXECUTABLE_PRICE', 'Cache, static, request-provided, or unreported prices are not executable')
   }
 
-  if (input.sequenceState === 'gap' || input.sequenceState === 'out_of_order') {
+  if (input.sequenceState !== 'continuous') {
     return reject('SEQUENCE_GAP', 'Sequence continuity is not healthy')
   }
 
@@ -45,7 +45,7 @@ export function authorizeMarketAction(input: MarketAuthorizationInput): MarketAu
     if (input.freshnessClass === 'green') {
       return { allowed: true, code: 'ALLOWED', message: 'Protective reduction allowed on healthy green data' }
     }
-    if (input.freshnessClass === 'amber' && input.secondaryConfirmed) {
+    if (input.freshnessClass === 'amber' && input.secondaryConfirmed === true) {
       return { allowed: true, code: 'ALLOWED', message: 'Protective reduction allowed on amber data with healthy secondary confirmation' }
     }
     if (input.freshnessClass === 'amber') {

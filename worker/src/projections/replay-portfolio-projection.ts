@@ -24,6 +24,13 @@ export async function projectReplayEvent(db: D1Database, event: ReplayOutboxEven
     if (typeof r.realizedPnl !== 'string' || r.realizedPnl.length > 120) throw new Error('Invalid replay receipt P&L')
     asSignedDecimalString(r.realizedPnl)
     state = r.state
+  } else if (record.type === 'replay_valuation') {
+    const r = record.receipt
+    if (!r || r.executionAuthorized !== false || !validId(r.eventId) || !HASH.test(r.inputHash) ||
+        !r.state?.valuation || r.id !== await canonicalHash({portfolioId:r.state.portfolioId,eventId:r.eventId,kind:'valuation'})) {
+      throw new Error('Invalid replay valuation receipt')
+    }
+    state = r.state
   } else if (record.type === 'replay_halted' && record.executionAuthorized === false && record.state?.halted === true) {
     state = record.state
   } else throw new Error('Invalid replay event')

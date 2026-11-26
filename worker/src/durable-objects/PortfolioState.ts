@@ -4,6 +4,7 @@
  */
 import { canonicalHash } from '../live/canonical-json.ts'
 import { assertReplayConservation } from './replay-accounting-invariant.ts'
+import { computeReplayValuation, normalizeMarks, type ReplayMark, type ReplayValuation } from './replay-valuation.ts'
 import {
   asDecimalString as decimal, asSignedDecimalString as signed,
   addDecimal, addSignedDecimal, subtractDecimal, subtractNonNegativeDecimal,
@@ -22,6 +23,10 @@ export type PortfolioSnapshot = {
   realizedPnl: SignedDecimalString
   positions: Position[]
   halted: boolean
+  haltReason: 'manual_replay_halt' | 'replay_drawdown_limit' | null
+  peakEquity: DecimalString
+  lastValuationAtMs: number | null
+  valuation: ReplayValuation | null
 }
 export type ReplayFill = {
   mode: 'isolated_paper_replay'
@@ -42,9 +47,22 @@ export type ReplayReceipt = {
   providerMutationAllowed: false
 }
 type Result = ReplayReceipt & { replayed: boolean }
+export type ReplayValuationInput = {
+  mode: 'isolated_paper_replay'
+  portfolioId: string
+  eventId: string
+  expectedVersion: number
+  atMs: number
+  marks: ReplayMark[]
+}
+export type ReplayValuationReceipt = {
+  id: string; inputHash: string; eventId: string
+  state: PortfolioSnapshot; executionAuthorized: false
+}
 export type ReplayOutboxEvent =
   | {type: 'replay_fill'; receipt: ReplayReceipt}
   | {type: 'replay_halted'; state: PortfolioSnapshot; executionAuthorized: false}
+  | {type: 'replay_valuation'; receipt: ReplayValuationReceipt}
 type TransactionStore = Pick<DurableObjectStorage, 'transaction'>
 const ZERO = decimal('0')
 const ONE_QUARTER = decimal('0.25')
@@ -99,7 +117,8 @@ export class PortfolioReplayLedger {
       if (await tx.get(STATE)) throw new Error('Replay portfolio already initialized')
       const state: PortfolioSnapshot = {
         portfolioId: id, version: 0, initialCash: cash, cash, protectedReserve: ZERO,
-        realizedPnl: signed('0'), positions: [], halted: false,
+        realizedPnl: signed('0'), positions: [], halted: false, haltReason: null,
+        peakEquity: cash, lastValuationAtMs: null, valuation: null,
       }
       assertReplayConservation(state)
       await tx.put(STATE, state)
@@ -128,7 +147,7 @@ export class PortfolioReplayLedger {
       const result: ReplayOutboxEvent[] = []
       for (let version = afterVersion + 1; version <= state.version && result.length < limit; version++) {
         const event = await tx.get<ReplayOutboxEvent>('paper-replay:outbox:' + version)
-        const snapshot = event?.type === 'replay_fill' ? event.receipt.state :
+        const snapshot = event?.type === 'replay_fill' || event?.type === 'replay_valuation' ? event.receipt.state :
           event?.type === 'replay_halted' ? event.state : null
         if (!event || !snapshot || snapshot.version !== version || snapshot.portfolioId !== state.portfolioId) {
           throw new Error('Replay outbox integrity failure')
@@ -149,10 +168,51 @@ export class PortfolioReplayLedger {
       assertReplayConservation(state)
       if (state.halted) return state
       if (!Number.isSafeInteger(state.version + 1)) throw new Error('Replay version exhausted')
-      const next = { ...state, halted: true, version: state.version + 1 }
+      const next: PortfolioSnapshot = { ...state, halted: true, haltReason: 'manual_replay_halt', version: state.version + 1 }
       await tx.put(STATE, next)
       await tx.put('paper-replay:outbox:' + next.version, { type: 'replay_halted', state: next, executionAuthorized: false })
       return next
+    })
+  }
+
+  /** Commit a complete hypothetical mark set and drawdown latch atomically.
+   * Valuation remains available after a halt; it never clears the latch.
+   */
+  async mark(input: ReplayValuationInput): Promise<ReplayValuationReceipt & {replayed: boolean}> {
+    if (input.mode !== 'isolated_paper_replay' || !Number.isSafeInteger(input.expectedVersion) ||
+        input.expectedVersion < 0 || !Number.isSafeInteger(input.atMs) || input.atMs <= 0) {
+      throw new TypeError('Invalid replay valuation input')
+    }
+    const event = {mode:input.mode,portfolioId:identifier(input.portfolioId),eventId:identifier(input.eventId),
+      expectedVersion:input.expectedVersion,atMs:input.atMs,marks:normalizeMarks(input.marks)}
+    this.assertScope(event.portfolioId)
+    const id = await canonicalHash({portfolioId:event.portfolioId,eventId:event.eventId,kind:'valuation'})
+    const inputHash = await canonicalHash(event)
+    const key = 'paper-replay:valuation-receipt:' + id
+    return this.storage.transaction(async tx => {
+      const state = await tx.get<PortfolioSnapshot>(STATE)
+      if (!state || state.portfolioId !== event.portfolioId) throw new Error('Replay portfolio mismatch')
+      assertReplayConservation(state)
+      const existing = await tx.get<ReplayValuationReceipt>(key)
+      if (existing) {
+        if (existing.inputHash !== inputHash) throw new Error('Replay valuation identity conflict')
+        assertReplayConservation(existing.state)
+        return {...existing,replayed:true}
+      }
+      if (state.version !== event.expectedVersion) throw new Error('Replay state version conflict')
+      if (state.lastValuationAtMs !== null && event.atMs <= state.lastValuationAtMs) throw new Error('Replay valuation clock regression')
+      if (!Number.isSafeInteger(state.version+1)) throw new Error('Replay version exhausted')
+      const computed = computeReplayValuation(state,event.marks,event.atMs)
+      const next: PortfolioSnapshot = {...state,version:state.version+1,
+        peakEquity:computed.peakEquity,lastValuationAtMs:event.atMs,valuation:computed.valuation,
+        halted:state.halted || computed.limitReached,
+        haltReason:state.haltReason ?? (computed.limitReached ? 'replay_drawdown_limit' : null)}
+      assertReplayConservation(next)
+      const receipt: ReplayValuationReceipt = {id,inputHash,eventId:event.eventId,state:next,executionAuthorized:false}
+      await tx.put(STATE,next)
+      await tx.put(key,receipt)
+      await tx.put('paper-replay:outbox:'+next.version,{type:'replay_valuation',receipt})
+      return {...receipt,replayed:false}
     })
   }
 
@@ -177,6 +237,8 @@ export class PortfolioReplayLedger {
       if (!Number.isSafeInteger(state.version + 1)) throw new Error('Replay version exhausted')
       const next: PortfolioSnapshot = structuredClone(state)
       next.version++
+      // A fill changes inventory and invalidates the prior valuation. Never report it as current.
+      next.valuation = null
       const notional = multiplyDecimal(event.quantity, event.simulatedPrice)
       let pnl = signed('0')
       const position = next.positions.find(p => p.symbol === event.symbol)

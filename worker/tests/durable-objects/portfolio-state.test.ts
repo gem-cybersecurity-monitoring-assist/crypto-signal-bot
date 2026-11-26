@@ -139,3 +139,53 @@ describe('replay accounting conservation and outbox evidence', () => {
     await expect(ledger.outboxPage(0)).rejects.toThrow('outbox integrity failure')
   })
 })
+
+describe('atomic replay market valuation and drawdown latch',()=>{
+  const marks=(overrides:Partial<import('../../src/durable-objects/PortfolioState').ReplayValuationInput>={})=>({
+    mode:'isolated_paper_replay' as const,portfolioId:'test-portfolio',eventId:'mark1',
+    expectedVersion:1,atMs:1000,marks:[{symbol:'BTC-USDT',price:'120'}],...overrides,
+  })
+  it('marks inventory, tracks peak and latches drawdown without changing book accounting',async()=>{
+    const {ledger,storage}=await setup()
+    await ledger.apply(event())
+    const first=await ledger.mark(marks())
+    expect(first.state.valuation).toMatchObject({equity:'1038',marketValue:'240',unrealizedPnl:'38',drawdownPct:'0'})
+    expect(first.state.peakEquity).toBe('1038')
+    const low=await ledger.mark(marks({eventId:'mark2',expectedVersion:2,atMs:2000,marks:[{symbol:'BTC-USDT',price:'40'}]}))
+    expect(low.state.valuation?.equity).toBe('878')
+    expect(low.state.haltReason).toBe('replay_drawdown_limit')
+    expect(low.state.cash).toBe('798')
+    const restored=new PortfolioReplayLedger(storage)
+    await expect(restored.apply(event({eventId:'next',expectedVersion:3}))).rejects.toThrow('halted')
+    const high=await restored.mark(marks({eventId:'mark3',expectedVersion:3,atMs:3000}))
+    expect(high.state.halted).toBe(true)
+    expect((await restored.outboxPage(0)).map(e=>e.type)).toEqual(['replay_fill','replay_valuation','replay_valuation','replay_valuation'])
+  })
+  it('rejects incomplete mark sets and clock regressions, preserves duplicate receipts',async()=>{
+    const {ledger}=await setup()
+    await ledger.apply(event())
+    await expect(ledger.mark(marks({marks:[]}))).rejects.toThrow('Incomplete')
+    const first=await ledger.mark(marks())
+    expect((await ledger.mark(marks())).replayed).toBe(true)
+    await expect(ledger.mark(marks({marks:[{symbol:'BTC-USDT',price:'121'}]}))).rejects.toThrow('identity conflict')
+    await expect(ledger.mark(marks({eventId:'later',expectedVersion:2,atMs:999}))).rejects.toThrow('clock regression')
+    expect((await ledger.snapshot())?.version).toBe(first.state.version)
+  })
+  it('invalidates a mark after a fill, retains peak and refuses a backward mark',async()=>{
+    const {ledger}=await setup()
+    await ledger.apply(event())
+    await ledger.mark(marks())
+    const sold=await ledger.apply(event({eventId:'sell',expectedVersion:2,side:'SELL',quantity:'1'}))
+    expect(sold.state.valuation).toBeNull()
+    expect(sold.state.peakEquity).toBe('1038')
+    await expect(ledger.mark(marks({eventId:'old',expectedVersion:3,atMs:1000}))).rejects.toThrow('clock regression')
+  })
+  it('rolls back a valuation and halt if outbox persistence fails',async()=>{
+    const {ledger,storage}=await setup()
+    await ledger.apply(event())
+    storage.failOutbox=true
+    await expect(ledger.mark(marks({marks:[{symbol:'BTC-USDT',price:'1'}]}))).rejects.toThrow('Injected rollback')
+    expect((await ledger.snapshot())?.halted).toBe(false)
+    expect((await ledger.snapshot())?.valuation).toBeNull()
+  })
+})

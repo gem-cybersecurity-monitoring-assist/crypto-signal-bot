@@ -18,6 +18,7 @@ Changes (NAV anchor + Telegram alerts):
 from __future__ import annotations
 
 import asyncio
+import math
 import logging
 import os
 import time
@@ -83,21 +84,21 @@ def get_executor_status() -> dict:
 
 
 async def _get_equity() -> float:
-    try:
-        from backend.services.portfolio.service import get_portfolio_summary
-        summary = await get_portfolio_summary()
-        return float(summary.get("equity", 10000.0))
-    except Exception:
-        return 10000.0
+    from backend.services.portfolio.service import get_portfolio_summary
+    summary = await get_portfolio_summary()
+    equity = float(summary["equity"])
+    if not math.isfinite(equity) or equity <= 0:
+        raise ValueError("Portfolio equity unavailable")
+    return equity
 
 
 async def _get_open_positions() -> list:
-    try:
-        from backend.services.portfolio.service import get_portfolio_summary
-        summary = await get_portfolio_summary()
-        return summary.get("open_positions", [])
-    except Exception:
-        return []
+    from backend.services.portfolio.service import get_portfolio_summary
+    summary = await get_portfolio_summary()
+    positions = summary["open_positions"]
+    if not isinstance(positions, list):
+        raise ValueError("Portfolio positions unavailable")
+    return positions
 
 
 async def _get_open_qty(symbol: str) -> float:
@@ -149,8 +150,8 @@ async def _fire_trade_alert(
     entry_price: float = 0.0,
 ) -> None:
     """Non-blocking Telegram alert — errors are swallowed so they never block trading."""
-    equity = await _get_equity()
     try:
+        equity = await _get_equity()
         from backend.services.telegram_alerts import send_trade_open, send_trade_close
         if action == "open":
             await send_trade_open(symbol, side, qty, price, confidence, strategy, equity)
@@ -192,8 +193,12 @@ async def _executor_sweep() -> None:
         log.error("[executor] Failed to get signals: %s", exc)
         return
 
-    equity = await _get_equity()
-    open_count = await _count_open_positions()
+    try:
+        equity = await _get_equity()
+        open_count = await _count_open_positions()
+    except Exception:
+        log.warning("[executor] Portfolio valuation unavailable — skipping sweep")
+        return
 
     for sig in signals:
         symbol = sig.get("symbol", "")

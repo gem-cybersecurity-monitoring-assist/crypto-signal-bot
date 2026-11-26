@@ -460,3 +460,50 @@ Still required: shared authoritative Guardian and risk inputs, authentic
 market event stream, production portfolio ownership and execution policy,
 market equity/drawdown, async authenticated projection transport and lag
 metrics, provider access/certification and independent release review.
+
+## Integrated replay valuation and legacy Python paper portfolio corrections
+The isolated portfolio Durable Object now commits complete hypothetical
+mark sets, marked equity, unrealized P&L, peak and drawdown with a persistent
+one-way replay halt and an immutable valuation outbox receipt. Incomplete
+marks, duplicate payload conflicts and backward mark clocks fail closed.
+Fills invalidate the current valuation without discarding its historical
+peak. Local D1 projection validates the same valuation invariant and stores
+the event idempotently. The replay drawdown threshold is 15% (the documented
+example), not an approved production policy. The fast-path integrity helper
+now rejects all noncontinuous sequence states and requires an explicit
+secondary-confirmation boolean for amber protective reduction.
+
+Existing Python paper execution (not a new writer) now serializes fills
+within one process, denies unavailable or malformed risk decisions, rejects
+stale/cache/wrong-symbol/expired quotes, rechecks risk at actual fill price
+and limit crossing, and prevents an already cancelled or filled order from
+filling again. Partial sells record actual inventory quantity and its fee.
+New BUY fees are realized expenses and new SELL realized P&L is net of
+sale fees; historic records are not rewritten. Equity is cash plus marked
+remaining inventory value; unrealized P&L is value minus remaining cost.
+Summary uses one complete price set with a revision check, preserves peak,
+and raises explicit valuation-unavailable on missing evidence. Portfolio
+read routes return 503 in that case; console exposes unavailable rather
+than fabricated values. Risk gate requires observed marks for exposure,
+no zero fallback, and rechecks halt after data retrieval. A local Guardian
+halt cannot be cleared by a stale Redis flag. Monitor advances peak only
+from complete valuation. Executor no longer substitutes fictional starting
+capital or an empty position list when valuation fails; its startup and
+routing are unchanged. Account scope remains the existing single paper
+portfolio. No new executable fast-path or provider operation.
+
+Validation on Azure: 774 backend tests passed (13 additional), 149 Worker
+contract tests passed (nine additional), 721 foundation tests passed.
+Actual local Miniflare SQLite Durable Object/D1 valuation delivery and
+idempotency verified. Worker build, paper safety, regulated foundation,
+certification safety, backend lint and architecture audit passed. Two
+pre-existing backend warnings. Prior CI 45772054441 succeeded; production
+attestation healthy. No deployed change or financial permission change.
+Limitations: legacy REST prices remain only legacy paper compatibility
+observations, not authenticated fast-path events. The local replay
+valuation and halt are not shared Guardian authority. Legacy DB writes
+are still best-effort and restore is not a full atomic FIFO reconstruction;
+historic fee and snapshot accounting may need reconciliation. No
+production Durable Object/queue migration, authenticated exchange
+certification, permitted external snapshot access or independent review
+has been completed.

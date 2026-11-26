@@ -16,6 +16,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, field_validator
 
 from backend.services.portfolio.service import (
+    PortfolioValuationUnavailable,
     get_daily_pnl,
     get_equity_history,
     get_order,
@@ -164,7 +165,10 @@ async def get_order_route(order_id: str) -> OrderOut:
     summary="Full portfolio summary with positions and PnL",
 )
 async def portfolio_summary() -> PortfolioOut:
-    data = await get_portfolio_summary()
+    try:
+        data = await get_portfolio_summary()
+    except PortfolioValuationUnavailable as exc:
+        raise HTTPException(status_code=503, detail="Complete portfolio valuation unavailable") from exc
     return PortfolioOut(**data)
 
 
@@ -226,7 +230,10 @@ async def positions_detail() -> List[PositionDetailOut]:
     Returns each open position with unrealized PnL, realized PnL,
     notional value, PnL %, and lot count — sorted by notional value descending.
     """
-    return [PositionDetailOut(**p) for p in await get_positions_detail()]
+    try:
+        return [PositionDetailOut(**p) for p in await get_positions_detail()]
+    except PortfolioValuationUnavailable as exc:
+        raise HTTPException(status_code=503, detail="Complete portfolio valuation unavailable") from exc
 
 
 @router.get(
@@ -247,7 +254,10 @@ async def daily_pnl(
     Today's unrealized PnL is computed live.
     Sorted newest-first.
     """
-    rows = await get_daily_pnl(days=days)
+    try:
+        rows = await get_daily_pnl(days=days)
+    except PortfolioValuationUnavailable as exc:
+        raise HTTPException(status_code=503, detail="Complete portfolio valuation unavailable") from exc
     return [DailyPnlOut(**r) for r in rows]
 
 

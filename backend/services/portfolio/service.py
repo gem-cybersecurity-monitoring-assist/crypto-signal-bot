@@ -7,7 +7,7 @@ Handles:
   - Order lifecycle: MARKET (instant fill) + LIMIT (pending fill on price cross)
   - FIFO position tracking with realized PnL
   - Unrealized PnL via live prices
-  - Equity = cash + Σ unrealized PnL
+  - Equity = cash + market value of remaining inventory
   - Drawdown tracking vs peak equity
   - Equity snapshots (persisted every N seconds)
   - DB persistence for orders, trades, positions, equity snapshots
@@ -23,7 +23,7 @@ import time
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, ROUND_HALF_UP, ROUND_DOWN
 from typing import Coroutine, Dict, List, Optional, Tuple
 
 from backend.services.market_data.service import get_price
@@ -117,6 +117,8 @@ _persistence_tasks: set[asyncio.Task] = set()
 _portfolio_stop: Optional[asyncio.Event] = None
 _portfolio_starting = False
 _SHUTDOWN_TIMEOUT = 15.0
+_fill_lock = asyncio.Lock()
+_state_revision = 0
 
 
 def _schedule_persistence(coro: Coroutine) -> None:
@@ -146,7 +148,8 @@ async def _next_tick(interval: float) -> bool:
 
 
 def reset_portfolio(starting_cash: Decimal = STARTING_CASH) -> None:
-    global _cash, _lots, _orders, _trades, _trade_counter, _peak_equity
+    global _cash, _lots, _orders, _trades, _trade_counter, _peak_equity, _state_revision
+    _state_revision += 1
     _cash = starting_cash
     _lots.clear()
     _orders.clear()
@@ -158,6 +161,29 @@ def reset_portfolio(starting_cash: Decimal = STARTING_CASH) -> None:
 # ─────────────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────────────
+
+class PortfolioValuationUnavailable(RuntimeError):
+    """A complete, fresh mark set is required for portfolio valuation."""
+
+
+def validated_mark(snap, symbol: str) -> Decimal:
+    """Legacy paper REST observation only, never fast-path execution evidence."""
+    from backend.services.market_data.service import PRICE_STALE_THRESHOLD_SECONDS
+    if (
+        snap.stale is not False
+        or snap.market_data_mode not in ("live", "paper_live")
+        or snap.symbol != symbol
+        or not isinstance(snap.source, str) or not snap.source
+        or snap.source.startswith("cache:")
+        or type(snap.fetched_at) is not int
+        or not 0 <= int(time.time()) - snap.fetched_at <= PRICE_STALE_THRESHOLD_SECONDS
+    ):
+        raise PortfolioValuationUnavailable("Fresh portfolio price unavailable")
+    mark = _qty(snap.price)
+    if not mark.is_finite() or mark <= 0:
+        raise PortfolioValuationUnavailable("Invalid portfolio mark")
+    return mark
+
 
 def _qty(v) -> Decimal:
     return Decimal(str(v)).quantize(PRECISION, rounding=ROUND_HALF_UP)
@@ -201,7 +227,7 @@ def _fifo_close(
         return Decimal("0"), Decimal("0")
 
     avg_cost = total_cost / consumed
-    realized = (fill_price - avg_cost) * consumed
+    realized = fill_price * consumed - total_cost
     return avg_cost, realized.quantize(PRECISION, rounding=ROUND_HALF_UP)
 
 
@@ -255,189 +281,217 @@ async def submit_order(
     )
     _orders[order.id] = order
 
-    # ── Risk gate (RULE 5: risk always overrides strategy) ─────────────────
-    try:
-        import sys as _sys
-        _self_mod = _sys.modules[__name__]
-        _fn = getattr(_self_mod, "_evaluate_order", None)
-        if _fn is None:
-            import importlib as _il
-            _rg = _il.import_module("backend.services.risk_gate.service")
-            _fn = _rg.evaluate_order
-        decision = await _fn(symbol=symbol, side=side, qty=qty, price=price)
-        if not decision.approved:
-            order.status    = "CANCELLED"
-            order.updated_at = int(time.time())
-            log.warning("[portfolio] %s BLOCKED by risk gate: %s",
-                        order.id[:8], decision.reasons)
-            await _persist_order(order)
-            return order
-        # Apply size multiplier from risk rules
-        if 0 < decision.size_multiplier < 1.0:
-            order.qty = _qty(float(order.qty) * decision.size_multiplier)
-    except Exception as exc:
-        log.warning("[portfolio] risk gate unavailable (%s) — order proceeds", exc)
-
-    if order_type.upper() == "MARKET":
+    if (
+        order.account_id != _DEFAULT_ACCOUNT_ID
+        or order.side not in ("BUY", "SELL")
+        or order.order_type not in ("MARKET", "LIMIT")
+        or not order.qty.is_finite() or order.qty <= 0
+        or (order.order_type == "LIMIT" and
+            (order.price is None or not order.price.is_finite() or order.price <= 0))
+    ):
+        order.status = "CANCELLED"
+    elif order.order_type == "MARKET":
         await _fill_order(order)
-    # LIMIT: stays PENDING until price crosses (checked in background loop)
+    elif not await _apply_risk_gate(order, order.price):
+        order.status = "CANCELLED"
+        order.updated_at = int(time.time())
 
     await _persist_order(order)
     return order
 
 
-async def _fill_order(order: OrderState) -> None:
-    """Execute a fill — updates cash, lots, positions, trades."""
-    global _cash, _peak_equity, _trade_counter
-
-    from backend.services.market_data.service import MarketDataStale
+async def _apply_risk_gate(order: OrderState, price: Optional[Decimal]) -> bool:
+    """A missing, malformed or unavailable decision never grants permission."""
     try:
-        snap = await get_price(order.symbol)
-        fill_price = _qty(snap.price)
-    except MarketDataStale as stale_exc:
-        # Use stale cached price for paper fills — acceptable for paper trading.
-        if stale_exc.stale_ticker and stale_exc.stale_ticker.price > 0:
-            fill_price = _qty(stale_exc.stale_ticker.price)
-            log.info("Filling %s with stale price %.4f (%s)",
-                     order.id[:8], float(fill_price), stale_exc.reason)
-        else:
-            log.warning("Cannot fill %s — stale price unavailable: %s", order.id, stale_exc)
+        fn = _evaluate_order
+        if fn is None:
+            # Preserve the existing deferred service lookup: risk reads portfolio state.
+            import importlib
+            fn = importlib.import_module("backend.services.risk_gate.service").evaluate_order
+        decision = await fn(symbol=order.symbol, side=order.side,
+                            qty=float(order.qty), price=float(price) if price is not None else None)
+        multiplier = Decimal(str(decision.size_multiplier))
+        if (
+            decision.approved is not True or decision.kill_switch is not False
+            or not multiplier.is_finite() or not Decimal("0") < multiplier <= Decimal("1")
+        ):
+            return False
+        adjusted = (order.qty * multiplier).quantize(PRECISION, rounding=ROUND_DOWN)
+        if adjusted <= 0:
+            return False
+        order.qty = adjusted
+        return True
+    except Exception:
+        log.warning("[portfolio] risk decision unavailable — paper order blocked")
+        return False
+
+
+async def _fill_order(order: OrderState) -> None:
+    """Serialize paper fills within the existing process and recheck risk."""
+    async with _fill_lock:
+        await _fill_order_locked(order)
+
+
+async def _fill_order_locked(order: OrderState) -> None:
+    global _cash, _peak_equity, _trade_counter, _state_revision
+
+    if order.status != "PENDING":
+        return
+    revision = _state_revision
+
+    def cancel() -> None:
+        if order.status == "PENDING":
             order.status = "CANCELLED"
             order.updated_at = int(time.time())
+
+    try:
+        snap = await get_price(order.symbol)
+        fill_price = validated_mark(snap, order.symbol)
+    except Exception:
+        cancel()
+        return
+
+    if order.status != "PENDING":
+        return
+    if order.order_type == "LIMIT":
+        if order.price is None or (
+            (order.side == "BUY" and fill_price > order.price)
+            or (order.side == "SELL" and fill_price < order.price)
+        ):
             return
-    except Exception as exc:
-        log.warning("Cannot fill %s — price unavailable: %s", order.id, exc)
-        order.status = "CANCELLED"
-        order.updated_at = int(time.time())
+    if not await _apply_risk_gate(order, fill_price):
+        cancel()
+        return
+    # A cancel can arrive while price or risk is being awaited. Recheck the
+    # same quote after the risk call and before any state mutation.
+    if order.status != "PENDING":
+        return
+    if revision != _state_revision:
+        cancel()
+        return
+    try:
+        validated_mark(snap, order.symbol)
+    except Exception:
+        cancel()
         return
 
     now = int(time.time())
-    cost  = order.qty * fill_price
-    fee   = (cost * FEE_RATE).quantize(PRECISION, rounding=ROUND_HALF_UP)
-    realized_pnl: Optional[Decimal] = None
-
+    if order.side == "SELL":
+        held = sum((lot.qty for lot in _lots.get(order.symbol, [])), Decimal("0"))
+        order.qty = min(order.qty, held)
+    if order.side not in ("BUY", "SELL") or not order.qty.is_finite() or order.qty <= 0:
+        cancel()
+        return
+    cost = order.qty * fill_price
+    fee = (cost * FEE_RATE).quantize(PRECISION, rounding=ROUND_HALF_UP)
     if order.side == "BUY":
         total_cost = cost + fee
         if total_cost > _cash:
-            log.warning("Insufficient cash for %s: need %.2f have %.2f",
-                        order.id, total_cost, _cash)
-            order.status = "CANCELLED"
-            order.updated_at = now
+            cancel()
             return
         _cash -= total_cost
         _lots[order.symbol].append(Lot(
-            symbol=order.symbol, qty=order.qty,
-            entry_price=fill_price, opened_at=now, order_id=order.id,
+            symbol=order.symbol, qty=order.qty, entry_price=fill_price,
+            opened_at=now, order_id=order.id,
         ))
-        _schedule_persistence(_upsert_position(order.symbol, order.account_id))
-
-    elif order.side == "SELL":
-        # Check we have enough long exposure
-        held = sum(l.qty for l in _lots.get(order.symbol, []))
-        fill_qty = min(order.qty, held)
-        if fill_qty <= 0:
-            order.status = "CANCELLED"
-            order.updated_at = now
+        # Record acquisition fees as realized expenses. Historic trade rows
+        # are not rewritten by this change.
+        realized_pnl = -fee
+    else:
+        if fee > cost:
+            cancel()
             return
-        _, realized_pnl = _fifo_close(order.symbol, fill_qty, fill_price)
-        proceeds = fill_qty * fill_price - fee
-        _cash += proceeds.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-        _schedule_persistence(_upsert_position(order.symbol, order.account_id))
+        _, gross_pnl = _fifo_close(order.symbol, order.qty, fill_price)
+        realized_pnl = gross_pnl - fee
+        _cash += cost - fee
 
-    order.status    = "FILLED"
+    order.status = "FILLED"
     order.updated_at = now
     _trade_counter += 1
-
+    _state_revision += 1
     trade = TradeState(
         id=_trade_counter, order_id=order.id, account_id=order.account_id,
-        symbol=order.symbol, qty=order.qty, price=fill_price,
-        fee=fee, side=order.side, realized_pnl=realized_pnl, executed_at=now,
+        symbol=order.symbol, qty=order.qty, price=fill_price, fee=fee,
+        side=order.side, realized_pnl=realized_pnl, executed_at=now,
     )
     _trades.append(trade)
-
-    # Update peak equity
-    equity = await _compute_equity()
-    if equity > _peak_equity:
-        _peak_equity = equity
-
+    _schedule_persistence(_upsert_position(order.symbol, order.account_id))
     await _persist_trade(trade)
-    log.info("[portfolio] FILL %s %s %s qty=%s @ %s  pnl=%s",
-             order.side, order.symbol, order.id[:8],
-             order.qty, fill_price, realized_pnl)
+    try:
+        equity = await _compute_equity()
+        _peak_equity = max(_peak_equity, equity)
+    except PortfolioValuationUnavailable:
+        log.warning("[portfolio] marked equity unavailable after paper fill")
+    log.info("[portfolio] paper fill %s %s", order.side, order.symbol)
 
 
 # ─────────────────────────────────────────────────────────────────
 # Equity & PnL
 # ─────────────────────────────────────────────────────────────────
 
-async def _compute_equity() -> Decimal:
-    """equity = cash + Σ unrealized PnL across open positions."""
-    unrealized = Decimal("0")
-    for symbol, lots in _lots.items():
-        if not lots:
-            continue
+async def _marked_portfolio() -> tuple[Decimal, Decimal, Decimal, list[dict]]:
+    """One complete mark set for cash, equity, P&L and position breakdown."""
+    revision = _state_revision
+    cash = _cash
+    lots_by_symbol = {symbol: tuple(lots) for symbol, lots in _lots.items() if lots}
+    trades = tuple(_trades)
+    market_value = Decimal("0")
+    unrealized_total = Decimal("0")
+    positions = []
+    for symbol, lots in lots_by_symbol.items():
         try:
-            snap = await get_price(symbol)
-            mark = _qty(snap.price)
-        except Exception:
-            continue
-        total_qty  = sum(l.qty for l in lots)
+            mark = validated_mark(await get_price(symbol), symbol)
+        except Exception as exc:
+            raise PortfolioValuationUnavailable("Complete portfolio marks unavailable") from exc
+        total_qty = sum(l.qty for l in lots)
         total_cost = sum(l.qty * l.entry_price for l in lots)
-        avg_cost   = total_cost / total_qty if total_qty else Decimal("0")
-        unrealized += (mark - avg_cost) * total_qty
+        avg_entry = total_cost / total_qty
+        notional = mark * total_qty
+        unrealized = notional - total_cost
+        market_value += notional
+        unrealized_total += unrealized
+        realized = sum((t.realized_pnl for t in trades
+                        if t.symbol == symbol and t.realized_pnl is not None), Decimal("0"))
+        positions.append({
+            "symbol": symbol, "qty": float(total_qty),
+            "avg_entry_price": float(_usd(avg_entry)), "mark_price": float(mark),
+            "unrealized_pnl": float(_usd(unrealized)), "realized_pnl": float(_usd(realized)),
+        })
+    if revision != _state_revision:
+        raise PortfolioValuationUnavailable("Portfolio changed during valuation")
+    return cash, _usd(cash + market_value), _usd(unrealized_total), positions
 
-    return (_cash + unrealized).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+async def _compute_equity() -> Decimal:
+    _, equity, _, _ = await _marked_portfolio()
+    return equity
 
 
 async def get_portfolio_summary(account_id: str = _DEFAULT_ACCOUNT_ID) -> dict:
-    """Return full portfolio summary."""
+    """Return a consistent complete marked portfolio summary, or unavailable."""
+    global _peak_equity
+    if account_id != _DEFAULT_ACCOUNT_ID:
+        raise PortfolioValuationUnavailable("Portfolio account scope unavailable")
     now = int(time.time())
-    equity   = await _compute_equity()
+    cash, equity, unrealized, positions = await _marked_portfolio()
+    _peak_equity = max(_peak_equity, equity)
     drawdown = float((_peak_equity - equity) / _peak_equity * 100) if _peak_equity > 0 else 0.0
-
-    positions = []
-    for symbol, lots in _lots.items():
-        if not lots:
-            continue
-        total_qty  = sum(l.qty for l in lots)
-        total_cost = sum(l.qty * l.entry_price for l in lots)
-        avg_entry  = total_cost / total_qty if total_qty else Decimal("0")
-        try:
-            snap = await get_price(symbol)
-            mark = _qty(snap.price)
-            unrealized = (mark - avg_entry) * total_qty
-        except Exception:
-            mark, unrealized = Decimal("0"), Decimal("0")
-
-        realized = sum(
-            (t.realized_pnl for t in _trades
-             if t.symbol == symbol and t.realized_pnl is not None),
-            Decimal("0"),
-        )
-        positions.append({
-            "symbol":          symbol,
-            "qty":             float(total_qty),
-            "avg_entry_price": float(avg_entry.quantize(Decimal("0.01"))),
-            "mark_price":      float(mark),
-            "unrealized_pnl":  float(unrealized.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
-            "realized_pnl":    float(realized.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
-        })
 
     total_realized   = sum(
         t.realized_pnl for t in _trades if t.realized_pnl is not None
     ) or Decimal("0")
-    wins = [t for t in _trades if t.realized_pnl and t.realized_pnl > 0]
+    wins = [t for t in _trades if t.side == "SELL" and t.realized_pnl is not None and t.realized_pnl > 0]
     trade_count = len([t for t in _trades if t.side == "SELL"])
     win_rate = (len(wins) / trade_count * 100) if trade_count > 0 else 0.0
 
     return {
         "account_id":      account_id,
-        "cash_balance":    float(_cash),
+        "cash_balance":    float(cash),
         "equity":          float(equity),
         "max_equity":      float(_peak_equity),
         "drawdown_pct":    round(drawdown, 4),
         "total_realized_pnl":   float(total_realized.quantize(Decimal("0.01"))),
-        "total_unrealized_pnl": float((equity - _cash).quantize(Decimal("0.01"))),
+        "total_unrealized_pnl": float(unrealized),
         "trade_count":     trade_count,
         "win_rate_pct":    round(win_rate, 2),
         "open_positions":  positions,
@@ -457,7 +511,7 @@ def get_trades(limit: int = 50, symbol: Optional[str] = None) -> List[dict]:
             "qty":         float(t.qty),
             "price":       float(t.price),
             "fee":         float(t.fee),
-            "realized_pnl": float(t.realized_pnl) if t.realized_pnl else None,
+            "realized_pnl": float(t.realized_pnl) if t.realized_pnl is not None else None,
             "executed_at": t.executed_at,
         }
         for t in trades
@@ -502,15 +556,17 @@ def get_order(order_id: str) -> Optional[dict]:
 # ─────────────────────────────────────────────────────────────────
 
 async def _snapshot_loop() -> None:
+    global _peak_equity
     while await _next_tick(_SNAPSHOT_INTERVAL):
         try:
-            equity = await _compute_equity()
+            cash, equity, unrealized, _ = await _marked_portfolio()
+            _peak_equity = max(_peak_equity, equity)
             drawdown = float((_peak_equity - equity) / _peak_equity * 100) if _peak_equity > 0 else 0.0
             snap = EquitySnapshot(
                 account_id=_DEFAULT_ACCOUNT_ID,
                 equity=float(equity),
-                cash=float(_cash),
-                unrealized=float(equity - _cash),
+                cash=float(cash),
+                unrealized=float(unrealized),
                 drawdown_pct=drawdown,
                 max_equity=float(_peak_equity),
                 timestamp=int(time.time()),
@@ -533,8 +589,8 @@ async def _limit_fill_loop() -> None:
         for order in pending:
             try:
                 snap = await get_price(order.symbol)
-                mark = float(snap.price)
-                limit = float(order.price)
+                mark = validated_mark(snap, order.symbol)
+                limit = order.price
                 if order.side == "BUY"  and mark <= limit:
                     await _fill_order(order)
                     await _persist_order(order)
@@ -714,13 +770,8 @@ async def get_daily_pnl(
                     row["loss_count"] += 1
 
     # Attach today's live unrealized
-    if today in by_date or True:
-        try:
-            equity = await _compute_equity()
-            unrealized_today = float(equity - _cash)
-        except Exception:
-            unrealized_today = 0.0
-        by_date[today]["unrealized_pnl"] = unrealized_today
+    _, _, unrealized, _ = await _marked_portfolio()
+    by_date[today]["unrealized_pnl"] = float(unrealized)
 
     # Fill total_pnl and sort
     result = []
@@ -779,7 +830,8 @@ async def get_positions_detail() -> List[dict]:
     Return open positions with full PnL breakdown (unrealized + realized).
     """
     positions = []
-    for symbol, lots in _lots.items():
+    revision = _state_revision
+    for symbol, lots in tuple(_lots.items()):
         if not lots:
             continue
         total_qty  = sum(l.qty for l in lots)
@@ -787,10 +839,9 @@ async def get_positions_detail() -> List[dict]:
         avg_entry  = total_cost / total_qty if total_qty else Decimal("0")
 
         try:
-            snap = await get_price(symbol)
-            mark = _qty(snap.price)
-        except Exception:
-            mark = avg_entry
+            mark = validated_mark(await get_price(symbol), symbol)
+        except Exception as exc:
+            raise PortfolioValuationUnavailable("Complete portfolio marks unavailable") from exc
 
         unrealized = (mark - avg_entry) * total_qty
         realized   = sum(
@@ -815,6 +866,8 @@ async def get_positions_detail() -> List[dict]:
             "oldest_lot_ts":    min(l.opened_at for l in lots),
         })
 
+    if revision != _state_revision:
+        raise PortfolioValuationUnavailable("Portfolio changed during valuation")
     return sorted(positions, key=lambda p: abs(p["notional_value"]), reverse=True)
 
 
@@ -876,7 +929,7 @@ async def close_position(symbol: str) -> Optional[dict]:
     return {
         "order_id":   order.id,
         "symbol":     sym,
-        "qty_closed": total_qty,
+        "qty_closed": float(order.qty) if order.status == "FILLED" else 0.0,
         "status":     order.status,
         "created_at": order.created_at,
     }

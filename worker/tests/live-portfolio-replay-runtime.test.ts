@@ -63,6 +63,7 @@ test('local SQLite Durable Object serializes paper replay and enforces named iso
     if(poisoned.type==='replay_fill') {
       poisoned.receipt.state.cash='799' as typeof poisoned.receipt.state.cash
       poisoned.receipt.state.initialCash='1001' as typeof poisoned.receipt.state.initialCash
+      poisoned.receipt.state.peakEquity='1001' as typeof poisoned.receipt.state.peakEquity
     }
     await assert.rejects(projectReplayEvent(db,poisoned),/identity conflict/)
     const subsequent=await (await stub.fetch('https://fixture/outbox?after=1')).json<ReplayOutboxEvent[]>()
@@ -77,6 +78,25 @@ test('local SQLite Durable Object serializes paper replay and enforces named iso
     await assert.rejects(db.prepare("UPDATE isolated_replay_portfolio_events SET book_value='0' WHERE version=1").run(),/immutable/)
     assert.equal((await (await stub.fetch('https://fixture/outbox?after=3')).json<any[]>()).length,0)
     assert.equal((await stub.fetch('https://fixture/outbox?after=4')).status,409)
+    // Even after a halt, valuation is observable but cannot clear that halt.
+    const mark={mode:'isolated_paper_replay',portfolioId:'fixture-portfolio',eventId:'mark-1',
+      expectedVersion:3,atMs:1000,marks:[{symbol:'BTC-USDT',price:'50'}]}
+    const markResponse=await stub.fetch('https://fixture/mark',{method:'POST',body:JSON.stringify(mark)})
+    assert.equal(markResponse.status,200)
+    const markReceipt=await markResponse.json<any>()
+    assert.equal(markReceipt.state.valuation.equity,'796')
+    assert.equal(markReceipt.state.valuation.unrealizedPnl,'-204')
+    assert.equal(markReceipt.state.valuation.drawdownPct,'20.4')
+    assert.equal(markReceipt.state.halted,true)
+    const page=await (await stub.fetch('https://fixture/outbox?after=3')).json<ReplayOutboxEvent[]>()
+    assert.equal(page.length,1)
+    assert.equal(page[0].type,'replay_valuation')
+    const valuationProjection=await projectReplayEvent(db,page[0])
+    assert.equal(valuationProjection.version,4)
+    assert.equal(valuationProjection.bookValue,'1000')
+    assert.equal((await projectReplayEvent(db,page[0])).replayed,true)
+    const saved=await db.prepare('SELECT event_json FROM isolated_replay_portfolio_events WHERE version=4').first<{event_json:string}>()
+    assert.equal(JSON.parse(saved!.event_json).receipt.state.valuation.equity,'796')
     const blocked=await mf.getDurableObjectNamespace('BLOCKED')
     assert.equal((await blocked.get(blocked.idFromName('fixture-portfolio')).fetch('https://fixture/apply',{method:'POST'})).status,403)
     assert.equal((await mf.dispatchFetch('https://fixture/apply',{method:'POST'})).status,404)

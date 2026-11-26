@@ -1,4 +1,6 @@
 import type { PortfolioSnapshot } from './PortfolioState.ts'
+import { computeReplayValuation } from './replay-valuation.ts'
+import { canonicalJson } from '../live/canonical-json.ts'
 import { asDecimalString, asSignedDecimalString, addDecimal, addSignedDecimal,
   compareDecimal, compareSignedDecimal, type DecimalString } from '../live/decimal.ts'
 
@@ -17,7 +19,14 @@ export function assertReplayConservation(state: PortfolioSnapshot): DecimalStrin
       !Number.isSafeInteger(state.version) || state.version < 0 ||
       typeof state.halted !== 'boolean' || !Array.isArray(state.positions) ||
       state.positions.length > 32) throw new Error('Invalid replay state')
+  if (state.halted ? !['manual_replay_halt','replay_drawdown_limit'].includes(state.haltReason ?? '') : state.haltReason !== null) {
+    throw new Error('Invalid replay halt state')
+  }
   const opening = decimal(state.initialCash)
+  if (compareDecimal(decimal(state.peakEquity),opening)<0 ||
+      (state.lastValuationAtMs !== null && (!Number.isSafeInteger(state.lastValuationAtMs) || state.lastValuationAtMs <= 0))) {
+    throw new Error('Invalid replay valuation history')
+  }
   const cash = decimal(state.cash)
   const reserve = decimal(state.protectedReserve)
   if (typeof state.realizedPnl !== 'string' || state.realizedPnl.length > 120 ||
@@ -41,6 +50,12 @@ export function assertReplayConservation(state: PortfolioSnapshot): DecimalStrin
   const expected = addSignedDecimal(asSignedDecimalString(opening),asSignedDecimalString(state.realizedPnl))
   if (compareSignedDecimal(asSignedDecimalString(value),expected) !== 0) {
     throw new Error('Replay accounting conservation failed')
+  }
+  if (state.valuation !== null) {
+    if (!state.valuation || state.valuation.atMs !== state.lastValuationAtMs) throw new Error('Invalid replay valuation timestamp')
+    const check = computeReplayValuation(state,state.valuation.marks,state.valuation.atMs)
+    if (check.peakEquity !== state.peakEquity || canonicalJson(check.valuation) !== canonicalJson(state.valuation) ||
+        (check.limitReached && !state.halted)) throw new Error('Replay valuation integrity failure')
   }
   return value
 }

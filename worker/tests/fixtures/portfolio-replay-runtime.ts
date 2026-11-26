@@ -1,5 +1,5 @@
 // Local test harness only. Never a deployed Worker entrypoint.
-import { PortfolioState, PortfolioReplayLedger, type ReplayFill } from '../../src/durable-objects/PortfolioState'
+import { PortfolioState, PortfolioReplayLedger, type ReplayFill, type ReplayValuationInput } from '../../src/durable-objects/PortfolioState'
 export { PortfolioState }
 export class ReplayFixture extends PortfolioState {
   constructor(private readonly ctx: DurableObjectState) { super(ctx) }
@@ -7,6 +7,7 @@ export class ReplayFixture extends PortfolioState {
     try {
       const path=new URL(request.url).pathname
       if (path==='/initialize') return Response.json(await this.ledger.initialize('fixture-portfolio','1000'))
+      if (path==='/mark') return Response.json(await this.ledger.mark(await request.json<ReplayValuationInput>()))
       if (path==='/apply') return Response.json(await this.ledger.apply(await request.json<ReplayFill>()))
       if (path==='/rollback-probe') {
         const failureStore = {

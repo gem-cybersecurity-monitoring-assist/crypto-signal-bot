@@ -117,7 +117,13 @@ async def console_status() -> dict:
     Designed to power the Command Console dashboard.
     """
     guardian = await get_guardian_status()
-    portfolio = await get_portfolio_summary()
+    from backend.services.portfolio.service import PortfolioValuationUnavailable
+    try:
+        portfolio = await get_portfolio_summary()
+        valuation_status = "observed"
+    except PortfolioValuationUnavailable:
+        portfolio = {}
+        valuation_status = "unavailable"
     signal_status = get_signal_service_status()
     signals = [
         {
@@ -150,12 +156,13 @@ async def console_status() -> dict:
             "last_heartbeat_at": guardian.last_heartbeat_at,
         },
         "portfolio": {
+            "valuation_status": valuation_status,
             "cash_balance": portfolio.get("cash_balance"),
             "equity":       portfolio.get("equity"),
             "drawdown_pct": portfolio.get("drawdown_pct"),
             "trade_count":  portfolio.get("trade_count"),
-            "win_rate":     portfolio.get("win_rate"),
-            "positions":    portfolio.get("positions", []),
+            "win_rate":     portfolio.get("win_rate_pct"),
+            "positions":    portfolio.get("open_positions"),
         },
         "signals": {
             "running":  signal_status["running"],

@@ -201,11 +201,14 @@ def cooldown_remaining_seconds() -> int:
 
 
 async def is_kill_switch_active() -> bool:
+    # An observed local halt must never be cleared by a stale Redis flag.
+    if _kill_switch_active:
+        return True
     try:
         r = await _get_redis()
         if r:
             val = await r.get("KILL_SWITCH:active")
-            return val == "1"
+            return _kill_switch_active or val == "1"
     except Exception:
         pass
     return _kill_switch_active
