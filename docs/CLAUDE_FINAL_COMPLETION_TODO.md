@@ -284,3 +284,13 @@ Worker: https://crypto-signal-bot-api.analyzer-d94.workers.dev
   metadata, without bypassing provider/network restrictions. Verify a real
   snapshot bridge and subsequent event when permitted, then review durable
   gateway ownership. Guardian/ledger authority and release gates remain open.
+
+## Snapshot diagnostics checkpoint
+- [x] Add sanitized status and failure classifications; verify 124 Worker
+  tests, build, paper-safety and probe bundle.
+- [x] Identify snapshot failure: HTTP 451/access_denied on one instrumented
+  Azure attempt. Previous CI 45766578395 passed.
+- [ ] Obtain provider-supported permitted access to testnet snapshot service,
+  then verify a complete real bridge. Do not bypass denial or repeat retries.
+- [ ] Continue independent Guardian and ledger integration and reviewed
+  release work while provider access remains blocked.

@@ -349,3 +349,19 @@ Run from repository root with existing dependencies:
   worker/node_modules/.bin/esbuild worker/scripts/run-depth-testnet-probe.ts --bundle --platform=node --format=esm --target=node22 --outfile=/tmp/csb-depth-testnet-probe.mjs
   timeout -k 2s 12s node /tmp/csb-depth-testnet-probe.mjs
 Only run when permitted by provider/network access; do not circumvent denial.
+
+## Snapshot access diagnostics (2026-11-26)
+The bounded testnet probe now emits sanitized snapshot request/HTTP status
+and allowlisted failure categories, without returning provider error text.
+Denied, rate-limited, redirected, malformed, oversized and unavailable
+responses remain non-authorizing; the probe never retries. Nine additional
+diagnostic tests passed, bringing Worker contract/fast-path regression to
+124. Worker TypeScript build, paper-safety and standalone probe bundle passed.
+Prior checkpoint e0150bd4 CI 45766578395 passed.
+One instrumented Azure probe at 2026-11-26T06:15:37.046Z opened the public
+testnet socket, requested the depth snapshot and received HTTP 451
+(access_denied). Snapshot not received; bridge and subsequent observation
+not verified; no last sequence. Exit 1. HTTP 451 confirms denial at the
+snapshot access boundary; the precise policy/legal rationale was not
+independently established. No further retries or circumvention. This is
+an external access dependency, not an authenticated exchange certification.

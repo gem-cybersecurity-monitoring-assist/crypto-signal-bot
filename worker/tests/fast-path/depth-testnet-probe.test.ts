@@ -36,7 +36,7 @@ describe('one-shot testnet depth probe', () => {
     const t = setup(vi.fn(async () => new Response('',{status:451})))
     t.socket.open()
     t.socket.send(101)
-    expect(await t.pending).toMatchObject({status:'snapshot_unavailable',bridgeVerified:false})
+    expect(await t.pending).toMatchObject({status:'snapshot_unavailable',bridgeVerified:false,snapshotRequested:true,snapshotHttpStatus:451,snapshotFailure:'access_denied'})
     expect(t.fetchSnapshot).toHaveBeenCalledOnce()
     expect(t.socket.close).toHaveBeenCalledOnce()
   })
@@ -58,5 +58,47 @@ describe('one-shot testnet depth probe', () => {
     expect(await t.pending).toMatchObject({status:'socket_unavailable',socketOpened:false})
     expect(t.fetchSnapshot).not.toHaveBeenCalled()
     expect(t.openSocket).toHaveBeenCalledOnce()
+  })
+})
+
+describe('sanitized snapshot diagnostics', () => {
+  it.each([
+    [429, 'rate_limited'], [403, 'access_denied'], [503, 'http_unavailable'],
+    [302, 'redirect_rejected'], [200, 'unexpected_content_type'],
+  ])('classifies HTTP %i without returning provider text', async (status, failure) => {
+    const t = setup(vi.fn(async () => new Response('private provider text', {status})))
+    t.socket.open()
+    t.socket.send(101)
+    const result = await t.pending
+    expect(result).toMatchObject({snapshotHttpStatus:status,snapshotFailure:failure,bridgeVerified:false})
+    expect(JSON.stringify(result)).not.toContain('private provider text')
+    expect(t.fetchSnapshot).toHaveBeenCalledOnce()
+  })
+  it('classifies a network failure using only an allowlisted cause', async () => {
+    const t = setup(vi.fn(async () => {throw new TypeError('private host detail',{cause:{code:'ENOTFOUND'}})}))
+    t.socket.open()
+    t.socket.send(101)
+    const result = await t.pending
+    expect(result).toMatchObject({snapshotHttpStatus:null,snapshotFailure:'dns_unavailable'})
+    expect(JSON.stringify(result)).not.toContain('private host detail')
+  })
+  it('reports invalid JSON without copying body text', async () => {
+    const t = setup(vi.fn(async () => new Response('bad json private detail',{headers:{'content-type':'application/json'}})))
+    t.socket.open()
+    t.socket.send(101)
+    expect(await t.pending).toMatchObject({status:'snapshot_invalid',snapshotHttpStatus:200,snapshotFailure:'invalid_json'})
+  })
+  it('reports bounded-body rejection', async () => {
+    const t = setup(vi.fn(async () => new Response(' '.repeat(65537),{headers:{'content-type':'application/json'}})))
+    t.socket.open()
+    t.socket.send(101)
+    expect(await t.pending).toMatchObject({status:'snapshot_unavailable',snapshotFailure:'body_too_large'})
+  })
+  it('classifies a pending request at deadline', async () => {
+    const t = setup(vi.fn(async () => new Promise<Response>(() => {})))
+    t.socket.open()
+    t.socket.send(101)
+    expect(await t.pending).toMatchObject({status:'deadline_exceeded',snapshotRequested:true,snapshotFailure:'deadline_exceeded'})
+    expect(t.fetchSnapshot.mock.calls).toHaveLength(1)
   })
 })

@@ -17,6 +17,9 @@ type Result = {
   status: string
   socketOpened: boolean
   snapshotReceived: boolean
+  snapshotRequested: boolean
+  snapshotHttpStatus: number | null
+  snapshotFailure: string | null
   bridgeVerified: boolean
   subsequentObservation: boolean
   lastSequence: number | null
@@ -25,11 +28,37 @@ type Result = {
   network: 'testnet'
 }
 
-async function boundedText(response: Response): Promise<string> {
-  if (!response.ok || response.redirected || !response.body ||
-      !/^application\/json(?:\s*;|$)/i.test(response.headers.get('content-type') ?? '')) {
-    throw new Error('SNAPSHOT_HTTP_UNAVAILABLE')
+class SnapshotError extends Error {}
+
+function transportFailure(error: unknown): string {
+  if (error instanceof SnapshotError) return error.message
+  if (error instanceof Error && error.name === 'AbortError') return 'request_aborted'
+  const cause = error instanceof Error ? error.cause : null
+  const code = cause && typeof cause === 'object' && 'code' in cause ? cause.code : null
+  switch (code) {
+    case 'ENOTFOUND': case 'EAI_AGAIN': return 'dns_unavailable'
+    case 'ECONNREFUSED': case 'ECONNRESET': case 'ENETUNREACH': return 'connection_unavailable'
+    case 'ETIMEDOUT': case 'UND_ERR_CONNECT_TIMEOUT': case 'UND_ERR_HEADERS_TIMEOUT': return 'transport_timeout'
+    case 'CERT_HAS_EXPIRED': case 'UNABLE_TO_VERIFY_LEAF_SIGNATURE':
+    case 'SELF_SIGNED_CERT_IN_CHAIN': case 'ERR_TLS_CERT_ALTNAME_INVALID': return 'tls_validation_failed'
+    default: return 'transport_or_decode_unavailable'
   }
+}
+
+async function boundedText(response: Response): Promise<string> {
+  let failure: string | null = null
+  if (response.redirected || (response.status >= 300 && response.status < 400)) failure = 'redirect_rejected'
+  else if ([401, 403, 451].includes(response.status)) failure = 'access_denied'
+  else if ([418, 429].includes(response.status)) failure = 'rate_limited'
+  else if (!response.ok) failure = 'http_unavailable'
+  else if (!response.body) failure = 'empty_body'
+  else if (!/^application\/json(?:\s*;|$)/i.test(response.headers.get('content-type') ?? '')) failure = 'unexpected_content_type'
+  if (failure) {
+    // Cancel the body without reading or exposing provider error text.
+    void response.body?.cancel().catch(() => undefined)
+    throw new SnapshotError(failure)
+  }
+  if (!response.body) throw new SnapshotError('empty_body')
   const reader = response.body.getReader()
   const decoder = new TextDecoder('utf-8', {fatal: true})
   let total = 0
@@ -39,7 +68,7 @@ async function boundedText(response: Response): Promise<string> {
       const chunk = await reader.read()
       if (chunk.done) return result + decoder.decode()
       total += chunk.value.byteLength
-      if (total > MAX_BYTES) throw new Error('SNAPSHOT_TOO_LARGE')
+      if (total > MAX_BYTES) throw new SnapshotError('body_too_large')
       result += decoder.decode(chunk.value, {stream: true})
     }
   } finally {
@@ -59,6 +88,8 @@ export function probeTestnetDepth(deps: Dependencies, timeoutMs = 8000): Promise
     let generation: number | null = null
     let finished = false
     let snapshotRequested = false
+    let snapshotHttpStatus: number | null = null
+    let snapshotFailure: string | null = null
     let snapshot: {raw: string; id: number; attempt: number} | undefined
     let highestSequence = -1
     let bridged = false
@@ -70,6 +101,7 @@ export function probeTestnetDepth(deps: Dependencies, timeoutMs = 8000): Promise
       finished = true
       clearTimeout(timer)
       abort.abort()
+      if (status === 'deadline_exceeded' && snapshotRequested && !snapshot && !snapshotFailure) snapshotFailure = 'deadline_exceeded'
       const state = transport.status(deps.now())
       if (generation !== null) transport.disconnect(generation, deps.now())
       if (socket) {
@@ -80,6 +112,7 @@ export function probeTestnetDepth(deps: Dependencies, timeoutMs = 8000): Promise
         try { socket.close() } catch { /* already closed or connecting */ }
       }
       resolve({ status, socketOpened: generation !== null, snapshotReceived: !!snapshot,
+        snapshotRequested, snapshotHttpStatus, snapshotFailure,
         bridgeVerified: bridged, subsequentObservation: observed,
         lastSequence: state.feed?.lastSequence ?? null, executionAuthorized: false,
         providerAccountCertified: false, network: 'testnet' })
@@ -105,13 +138,20 @@ export function probeTestnetDepth(deps: Dependencies, timeoutMs = 8000): Promise
           method: 'GET', redirect: 'error', credentials: 'omit',
           signal: abort.signal, headers: { Accept: 'application/json' },
         })
+        if (finished) { void response.body?.cancel().catch(() => undefined); return }
+        snapshotHttpStatus = response.status
         const raw = await boundedText(response)
         if (finished) return
-        const id = JSON.parse(raw)?.lastUpdateId
-        if (!Number.isSafeInteger(id) || id < 0) { finish('snapshot_invalid'); return }
+        let id: unknown
+        try { id = JSON.parse(raw)?.lastUpdateId } catch { snapshotFailure = 'invalid_json'; finish('snapshot_invalid'); return }
+        if (typeof id !== 'number' || !Number.isSafeInteger(id) || id < 0) { snapshotFailure = 'invalid_sequence'; finish('snapshot_invalid'); return }
         snapshot = {raw, id, attempt}
         tryBridge()
-      } catch { finish('snapshot_unavailable') }
+      } catch (error) {
+        if (finished) return
+        snapshotFailure = transportFailure(error)
+        finish('snapshot_unavailable')
+      }
     }
     function onMessage(event: MessageEvent) {
       if (finished || generation === null) return
