@@ -302,3 +302,12 @@ Worker: https://crypto-signal-bot-api.analyzer-d94.workers.dev
   (overlap), build, paper-safety, lint and architecture audit.
 - [ ] Complete shared Guardian authority and durable ledger reconciliation;
   stored-row provenance is not a risk-cycle heartbeat or authority migration.
+
+## Transactional reconciliation evidence checkpoint
+- [x] Consolidate existing candidate ledger reconciliation reads into a
+  bounded transactional batch; enforce complete account/asset scope.
+- [x] Verify 720 foundation and 30 focused accounting tests including SQLite
+  migrations; build and safety checks pass.
+- [ ] Establish authoritative per-portfolio state owner and atomic paper
+  accounting, and certify deployed concurrent transaction behavior.
+  Reconciliation snapshot consistency is not atomic fill ownership.

@@ -82,6 +82,8 @@ type ReconciliationReceiptRow = {
 }
 
 type PositionRow = {
+  base_asset: string
+  quote_asset: string
   quantity: string
   total_cost_basis_quote: string
   average_entry_price: string | null
@@ -90,6 +92,8 @@ type PositionRow = {
 }
 
 type LotRow = {
+  base_asset: string
+  quote_asset: string
   lot_id: string
   original_quantity: string
   original_cost_quote: string
@@ -102,10 +106,14 @@ type ConsumptionRow = {
 }
 
 type RealizedPnlRow = {
+  base_asset: string
+  quote_asset: string
   realized_pnl_quote: string
 }
 
 type LedgerEntryRow = {
+  asset: string
+  journal_exchange_account_id: string | null
   direction: 'DEBIT' | 'CREDIT'
   amount: string
 }
@@ -206,22 +214,92 @@ function stableInput(
   }
 }
 
-async function loadPosition(
+type LedgerAccountRow = { ledger_account_id: string }
+const MAX_EVIDENCE_ROWS = 10000
+
+function boundedRows<T>(result: D1Result<unknown> | undefined): T[] {
+  if (!result?.success || !Array.isArray(result.results) || result.results.length > MAX_EVIDENCE_ROWS) {
+    throw new FillAccountingReconciliationUnavailableError('reconciliation snapshot unavailable or exceeds evidence bound')
+  }
+  return result.results as T[]
+}
+
+/** One D1 transactional batch captures a consistent projection snapshot.
+ * The later receipt describes this snapshot, not current execution clearance.
+ */
+async function loadEvidenceSnapshot(
   env: FillAccountingReconciliationStoreEnv,
   input: PersistFillAccountingReconciliationInput,
-): Promise<AccountingReconciliationPosition> {
-  const row = await env.DB.prepare(`
-    SELECT quantity, total_cost_basis_quote, average_entry_price,
-           cumulative_realized_pnl_quote, status
-      FROM live_position_accounting
-     WHERE exchange_account_id = ? AND product_id = ?
-     LIMIT 1
-  `).bind(input.exchangeAccountId, input.productId).first<PositionRow>()
+) {
+  const placeholders = input.ledgerBaseAccountIds.map(() => '?').join(', ')
+  const scope = [input.exchangeAccountId, input.productId]
+  const results = await env.DB.batch([
+    env.DB.prepare(`
+      SELECT base_asset, quote_asset, quantity, total_cost_basis_quote, average_entry_price,
+             cumulative_realized_pnl_quote, status
+        FROM live_position_accounting
+       WHERE exchange_account_id = ? AND product_id = ? LIMIT 1
+    `).bind(...scope),
+    env.DB.prepare(`
+      SELECT lot_id, base_asset, quote_asset, original_quantity, original_cost_quote
+        FROM live_cost_basis_lots
+       WHERE exchange_account_id = ? AND product_id = ?
+       ORDER BY acquired_at ASC, lot_id ASC LIMIT 10001
+    `).bind(...scope),
+    env.DB.prepare(`
+      SELECT c.lot_id, c.quantity, c.cost_basis_quote
+        FROM live_cost_basis_consumptions c
+        JOIN live_cost_basis_lots l ON l.lot_id = c.lot_id
+       WHERE l.exchange_account_id = ? AND l.product_id = ?
+       ORDER BY c.consumed_at ASC, c.consumption_id ASC LIMIT 10001
+    `).bind(...scope),
+    env.DB.prepare(`
+      SELECT base_asset, quote_asset, realized_pnl_quote
+        FROM live_realized_pnl_events
+       WHERE exchange_account_id = ? AND product_id = ?
+       ORDER BY realized_at ASC, realized_pnl_event_id ASC LIMIT 10001
+    `).bind(...scope),
+    env.DB.prepare(`
+      SELECT ledger_account_id FROM ledger_accounts
+       WHERE exchange_account_id = ? AND asset = ?
+         AND account_type IN ('INVENTORY_AVAILABLE', 'INVENTORY_RESERVED')
+       ORDER BY ledger_account_id LIMIT 10001
+    `).bind(input.exchangeAccountId, input.baseAsset),
+    env.DB.prepare(`
+      SELECT e.direction, e.amount, e.asset, j.exchange_account_id AS journal_exchange_account_id
+        FROM ledger_entries e LEFT JOIN ledger_journals j ON j.journal_id = e.journal_id
+       WHERE e.ledger_account_id IN (${placeholders})
+       ORDER BY e.created_at ASC, e.entry_id ASC LIMIT 10001
+    `).bind(...input.ledgerBaseAccountIds),
+  ])
+  if (results.length !== 6) {
+    throw new FillAccountingReconciliationUnavailableError('incomplete reconciliation snapshot')
+  }
+  const accounts = boundedRows<LedgerAccountRow>(results[4]).map(row => row.ledger_account_id).sort()
+  if (canonicalJson(accounts) !== canonicalJson(input.ledgerBaseAccountIds)) {
+    throw new FillAccountingReconciliationConflictError('ledger account scope differs from complete base inventory accounts')
+  }
+  return {
+    position: loadPosition(boundedRows<PositionRow>(results[0])[0] ?? null, input),
+    lots: loadLots(boundedRows<LotRow>(results[1]), boundedRows<ConsumptionRow>(results[2]), input),
+    realizedPnlEvents: loadRealizedPnl(boundedRows<RealizedPnlRow>(results[3]), input),
+    ledgerBaseInventoryBalance: loadLedgerBalance(boundedRows<LedgerEntryRow>(results[5]), input),
+  }
+}
+
+function assertAssetScope(row: {base_asset: string; quote_asset: string}, input: PersistFillAccountingReconciliationInput): void {
+  if (row.base_asset !== input.baseAsset || row.quote_asset !== input.quoteAsset) {
+    throw new FillAccountingReconciliationConflictError('accounting projection asset scope mismatch')
+  }
+}
+
+function loadPosition(row: PositionRow | null, input: PersistFillAccountingReconciliationInput): AccountingReconciliationPosition {
   if (!row) {
     throw new FillAccountingReconciliationUnavailableError(
       'position accounting projection is missing',
     )
   }
+  assertAssetScope(row, input)
   return Object.freeze({
     quantity: asDecimalString(row.quantity, 'position.quantity'),
     totalCostBasisQuote: asDecimalString(
@@ -239,26 +317,13 @@ async function loadPosition(
   })
 }
 
-async function loadLots(
-  env: FillAccountingReconciliationStoreEnv,
+function loadLots(
+  lots: LotRow[],
+  consumptions: ConsumptionRow[],
   input: PersistFillAccountingReconciliationInput,
-): Promise<readonly AccountingReconciliationLot[]> {
-  const lots = await env.DB.prepare(`
-    SELECT lot_id, original_quantity, original_cost_quote
-      FROM live_cost_basis_lots
-     WHERE exchange_account_id = ? AND product_id = ?
-     ORDER BY acquired_at ASC, lot_id ASC
-  `).bind(input.exchangeAccountId, input.productId).all<LotRow>()
-  const consumptions = await env.DB.prepare(`
-    SELECT c.lot_id, c.quantity, c.cost_basis_quote
-      FROM live_cost_basis_consumptions c
-      JOIN live_cost_basis_lots l ON l.lot_id = c.lot_id
-     WHERE l.exchange_account_id = ? AND l.product_id = ?
-     ORDER BY c.consumed_at ASC, c.consumption_id ASC
-  `).bind(input.exchangeAccountId, input.productId).all<ConsumptionRow>()
-
+): readonly AccountingReconciliationLot[] {
   const consumedByLot = new Map<string, { quantity: DecimalString; cost: DecimalString }>()
-  for (const row of consumptions.results) {
+  for (const row of consumptions) {
     const current = consumedByLot.get(row.lot_id) ?? { quantity: ZERO, cost: ZERO }
     current.quantity = addDecimal(
       current.quantity,
@@ -271,7 +336,8 @@ async function loadLots(
     consumedByLot.set(row.lot_id, current)
   }
 
-  return Object.freeze(lots.results.map((row) => {
+  return Object.freeze(lots.map((row) => {
+    assertAssetScope(row, input)
     const originalQuantity = asDecimalString(row.original_quantity, 'lot.originalQuantity')
     const originalCost = asDecimalString(row.original_cost_quote, 'lot.originalCostQuote')
     const consumed = consumedByLot.get(row.lot_id) ?? { quantity: ZERO, cost: ZERO }
@@ -297,38 +363,24 @@ async function loadLots(
   }))
 }
 
-async function loadRealizedPnl(
-  env: FillAccountingReconciliationStoreEnv,
-  input: PersistFillAccountingReconciliationInput,
-): Promise<readonly SignedDecimalString[]> {
-  const rows = await env.DB.prepare(`
-    SELECT realized_pnl_quote
-      FROM live_realized_pnl_events
-     WHERE exchange_account_id = ? AND product_id = ?
-     ORDER BY realized_at ASC, realized_pnl_event_id ASC
-  `).bind(input.exchangeAccountId, input.productId).all<RealizedPnlRow>()
-  return Object.freeze(rows.results.map((row) => (
-    asSignedDecimalString(row.realized_pnl_quote, 'realizedPnlQuote')
-  )))
+function loadRealizedPnl(
+  rows: RealizedPnlRow[], input: PersistFillAccountingReconciliationInput,
+): readonly SignedDecimalString[] {
+  return Object.freeze(rows.map(row => {
+    assertAssetScope(row, input)
+    return asSignedDecimalString(row.realized_pnl_quote, 'realizedPnlQuote')
+  }))
 }
 
-async function loadLedgerBalance(
-  env: FillAccountingReconciliationStoreEnv,
-  normalizedLedgerAccountIds: readonly string[],
-  baseAsset: string,
-): Promise<SignedDecimalString> {
-  const placeholders = normalizedLedgerAccountIds.map(() => '?').join(', ')
-  const rows = await env.DB.prepare(`
-    SELECT direction, amount
-      FROM ledger_entries
-     WHERE ledger_account_id IN (${placeholders})
-       AND asset = ?
-     ORDER BY created_at ASC, entry_id ASC
-  `).bind(...normalizedLedgerAccountIds, baseAsset).all<LedgerEntryRow>()
-  return calculateSignedLedgerBalance(rows.results.map((row) => ({
-    direction: row.direction,
-    amount: asDecimalString(row.amount, 'ledgerEntry.amount'),
-  })))
+function loadLedgerBalance(
+  rows: LedgerEntryRow[], input: PersistFillAccountingReconciliationInput,
+): SignedDecimalString {
+  return calculateSignedLedgerBalance(rows.map(row => {
+    if (row.asset !== input.baseAsset || row.journal_exchange_account_id !== input.exchangeAccountId) {
+      throw new FillAccountingReconciliationConflictError('ledger entry asset or journal scope mismatch')
+    }
+    return { direction: row.direction, amount: asDecimalString(row.amount, 'ledgerEntry.amount') }
+  }))
 }
 
 function receiptQuery(): string {
@@ -423,6 +475,7 @@ export async function persistFillAccountingReconciliation(
   const observedAt = iso(input.observedAt, 'observedAt')
   const normalizedInput: PersistFillAccountingReconciliationInput = {
     ...input,
+    reconciliationId,
     exchangeName,
     exchangeAccountId,
     productId,
@@ -455,14 +508,8 @@ export async function persistFillAccountingReconciliation(
     return replayResult(reconciliationId, exchangeName, existing)
   }
 
-  const position = await loadPosition(env, normalizedInput)
-  const lots = await loadLots(env, normalizedInput)
-  const realizedPnlEvents = await loadRealizedPnl(env, normalizedInput)
-  const ledgerBaseInventoryBalance = await loadLedgerBalance(
-    env,
-    normalizedLedgerAccountIds,
-    baseAsset,
-  )
+  const { position, lots, realizedPnlEvents, ledgerBaseInventoryBalance } =
+    await loadEvidenceSnapshot(env, normalizedInput)
   const result = await reconcileFillAccounting({
     reconciliationId,
     exchangeName,

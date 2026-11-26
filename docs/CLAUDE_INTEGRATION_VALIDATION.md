@@ -385,3 +385,23 @@ passed. Two pre-existing backend test warnings. Temporary Python test
 environment restored offline from 61 cached wheel archives (no provisioning).
 Production release attestation returned ok=true, failures=[], unchanged.
 The unified authoritative Guardian and atomic ledger remain incomplete.
+
+## Transactional reconciliation evidence snapshot
+Existing candidate accounting reconciliation now obtains positions, FIFO
+lots, consumptions, realized P&L, complete base inventory account scope and
+ledger entries through one transactional D1 batch. Reads are bounded to
+10,000 evidence rows per set; incomplete or oversized evidence fails closed.
+Position, lot, P&L and journal asset/account scope must agree. Requested
+inventory accounts must match the complete available/reserved inventory
+scope. Reconciliation ID normalization is consistent with receipt hashing.
+The receipt records the captured projection snapshot, not present-time
+clearance; its later insert is not in the same read transaction. No new
+ledger writer, provider operation, execution authority or deployment.
+Azure: 720 Worker foundation tests passed, including 30 focused accounting
+tests (six new cases, one using real SQLite migrations and a transactional
+test adapter). Worker build, fill accounting, paper-safety, regulated
+foundation and certification safety checks passed. Previous checkpoint
+7b012151 CI 45767461254 passed. Production attestation healthy.
+Cloudflare production transactional behavior and concurrent state mutation
+were not externally certified. Hot portfolio Durable Object, atomic paper
+fill ownership, cross-runtime reconciliation and release gates remain open.
