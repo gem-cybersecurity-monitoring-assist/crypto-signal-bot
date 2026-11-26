@@ -405,3 +405,32 @@ foundation and certification safety checks passed. Previous checkpoint
 Cloudflare production transactional behavior and concurrent state mutation
 were not externally certified. Hot portfolio Durable Object, atomic paper
 fill ownership, cross-runtime reconciliation and release gates remain open.
+
+## Phase 4 isolated portfolio transaction core
+Added the previously missing PortfolioState candidate in the designated
+durable-objects directory. An isolated historical paper-replay ledger commits
+versioned state, payload-bound deterministic receipt, FIFO lot accounting,
+modeled fee accounting, realized P&L, protected reserve and outbox record in
+one Durable Object storage transaction. A local one-way halt and named
+portfolio scope are enforced; version conflicts and duplicate payload
+conflicts are rejected. For replay tests only, a fixed 25% of positive
+realized P&L is transferred to protected reserve; this is not a production
+allocation policy. The candidate is not bound/exported from any deployed
+Worker entrypoint. Its HTTP interface rejects all requests. Only the
+test fixture exposes local synthetic replay inputs; no market-event or
+external provider execution path has been connected.
+Azure: 137 Worker contract/fast-path tests passed (nine new transaction
+tests), 721 Worker foundation tests passed (one new actual local Miniflare
+SQLite Durable Object test). Actual local runtime test verifies named
+scope, concurrent identical events, conflict rejection and injected
+outbox failure rollback followed by clean retry. Worker build, paper,
+regulated foundation and certification safety checks passed.
+Prior checkpoint 93eda405 CI 45767912698 succeeded. Production attestation
+ok=true, no failures. No changes to production bindings or state.
+Still required: Phase 3 incremental features/scouts/fusion and immutable
+authoritative risk decision contract; fresh provider event ownership;
+shared Guardian, hot paper intent integration, modeled slippage/exit policy,
+peak equity/drawdown, latency and property acceptance, outbox consumer
+and projections; production authority migration, provider certification
+and independent review. This isolated core does not complete Phase 4
+or change the required phase rollout order.

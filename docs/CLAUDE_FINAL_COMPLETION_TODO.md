@@ -311,3 +311,14 @@ Worker: https://crypto-signal-bot-api.analyzer-d94.workers.dev
 - [ ] Establish authoritative per-portfolio state owner and atomic paper
   accounting, and certify deployed concurrent transaction behavior.
   Reconciliation snapshot consistency is not atomic fill ownership.
+
+## Isolated portfolio transaction core checkpoint
+- [x] Implement per-portfolio candidate Durable Object transaction core,
+  named scope, deterministic payload-bound duplicate receipts, FIFO replay
+  accounting, reserve and outbox atomicity, local halt.
+- [x] Verify actual local SQLite Durable Object concurrent replay and
+  rollback; 137 Worker contracts and 721 foundation tests pass.
+- [ ] Finish authoritative Phase 3 risk/market event inputs and Phase 4
+  execution/exit accounting and state migration, shared Guardian and
+  outbox projection. Replay-only storage is not production authority.
+- [ ] Complete external access/certification and independent release review.
