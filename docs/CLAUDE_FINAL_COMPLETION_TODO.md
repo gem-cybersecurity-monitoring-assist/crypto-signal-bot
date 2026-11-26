@@ -294,3 +294,11 @@ Worker: https://crypto-signal-bot-api.analyzer-d94.workers.dev
   then verify a complete real bridge. Do not bypass denial or repeat retries.
 - [ ] Continue independent Guardian and ledger integration and reviewed
   release work while provider access remains blocked.
+
+## Guardian row-provenance checkpoint
+- [x] Expose original stored-row timestamps and reject unverified/historical
+  clear evidence from the Python comparison.
+- [x] Verify 761 backend tests, 128 Worker tests, 25 focused Guardian tests
+  (overlap), build, paper-safety, lint and architecture audit.
+- [ ] Complete shared Guardian authority and durable ledger reconciliation;
+  stored-row provenance is not a risk-cycle heartbeat or authority migration.

@@ -52,10 +52,35 @@ def worker_observation(payload: object, now: float) -> dict:
             return unknown
         if projections.get("d1_status") != "healthy" or guardian.get("reason") == "GUARDIAN_STATE_UNAVAILABLE":
             return {**unknown, "status": "storage_unverified", "paper_locked": locks, "authority": authority}
-        return {
-            "status": "observed", "halted": halted, "authority": authority,
-            "paper_locked": locks, "observed_at": observed.isoformat(),
+        # A fresh response is not proof of a freshly evaluated risk state.
+        # Old deployments lack the stored-row provenance; do not compare them.
+        evidence = {
+            **unknown, "authority": authority, "paper_locked": locks,
+            "observed_at": observed.isoformat(), "risk_cycle_verified": False,
+            "scope": "legacy_d1_global_flag",
         }
+        stamp = guardian.get("state_updated_at")
+        if (
+            guardian.get("state_source") != "legacy_d1_global_flag"
+            or guardian.get("row_status") != "recorded"
+            or guardian.get("risk_cycle_verified") is not False
+            or guardian.get("shared_clearance_verified") is not False
+            or not isinstance(stamp, str)
+            or authority != "legacy_d1"
+        ):
+            return {**evidence, "status": "provenance_unverified"}
+        updated = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+        if updated.tzinfo is None or updated.timestamp() > observed.timestamp():
+            return {**evidence, "status": "provenance_unverified"}
+        age = now - updated.timestamp()
+        if age < -2:
+            return {**evidence, "status": "provenance_unverified"}
+        evidence.update(state_updated_at=updated.isoformat(), state_age_seconds=round(max(0, age), 3))
+        if age > MAX_AGE_SECONDS:
+            # A stored halt never expires into clearance. Historical clear flags
+            # are not sufficient for comparing current runtime observations.
+            return {**evidence, "status": "historical", "halted": True if halted else None}
+        return {**evidence, "status": "observed", "halted": halted}
     except (KeyError, TypeError, ValueError, OverflowError, AttributeError):
         return unknown
 

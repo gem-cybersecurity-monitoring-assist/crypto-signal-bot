@@ -183,17 +183,27 @@ async function readD1Status(env: Env): Promise<'healthy' | 'unavailable'> {
 }
 
 async function readGuardianSnapshot(env: Env) {
-  type GuardianSnapshotRow = { triggered: number | boolean; reason: string | null; drawdown_pct: number }
+  type GuardianSnapshotRow = { triggered: number | boolean; reason: string | null; drawdown_pct: number; updated_at: string | null }
   let row: GuardianSnapshotRow | null = null
   try {
     row = await env.DB.prepare(
-      'SELECT triggered, reason, drawdown_pct FROM guardian_state WHERE id = 1 LIMIT 1',
+      'SELECT triggered, reason, drawdown_pct, updated_at FROM guardian_state WHERE id = 1 LIMIT 1',
     ).first<GuardianSnapshotRow>()
   } catch {
     // A failed read is unknown Guardian state, never clearance.
   }
   const available = row !== null && [true, false, 0, 1].includes(row.triggered)
+  const stamp = row?.updated_at
+  const parsed = typeof stamp === 'string' && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(stamp)
+    ? Date.parse(stamp.replace(' ', 'T') + 'Z') : NaN
+  const stateUpdatedAt = available && Number.isFinite(parsed) && parsed <= Date.now() &&
+    new Date(parsed).toISOString().slice(0, 19).replace('T', ' ') === stamp
+    ? new Date(parsed).toISOString() : null
+  const rowStatus: 'recorded' | 'unavailable' | 'invalid_timestamp' =
+    !available ? 'unavailable' : stateUpdatedAt === null ? 'invalid_timestamp' : 'recorded'
   return {
+    stateUpdatedAt,
+    rowStatus,
     halted: !available || row?.triggered === true || row?.triggered === 1,
     reason: !available ? 'GUARDIAN_STATE_UNAVAILABLE' : row?.reason ?? null,
     drawdownPct: numberOr(row?.drawdown_pct),
@@ -202,11 +212,11 @@ async function readGuardianSnapshot(env: Env) {
 }
 
 async function handleV2Infrastructure(request: Request, env: Env): Promise<Response> {
-  const nowMs = Date.now()
   const [guardian, d1Status] = await Promise.all([
     readGuardianSnapshot(env),
     readD1Status(env),
   ])
+  const nowMs = Date.now()
   const payload = buildV2InfrastructureStatus({
     guardian,
     d1Status,

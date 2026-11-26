@@ -30,3 +30,28 @@ describe('Guardian read status fails closed', () => {
     expect(JSON.stringify(body)).not.toContain('private storage detail')
   })
 })
+
+describe('Guardian persisted record provenance', () => {
+  it.each([
+    ['2025-01-01 00:00:00', 'recorded', '2025-01-01T00:00:00.000Z'],
+    ['2025-02-30 00:00:00', 'invalid_timestamp', null],
+    ['2099-01-01 00:00:00', 'invalid_timestamp', null],
+    [null, 'invalid_timestamp', null],
+  ])('reports original row time without inventing a risk cycle: %s', async (updated_at, row_status, state_updated_at) => {
+    const DB = {
+      prepare(sql: string) {
+        if (sql.includes('guardian_state')) {
+          expect(sql).toContain('updated_at')
+          return { async first() { return {triggered: 1, reason: 'TEST_HALT', drawdown_pct: 5, updated_at} } }
+        }
+        return { async first() { return {ok: 1} } }
+      },
+    }
+    const response = await worker.fetch(new Request('https://worker.example/v2/infrastructure/status'),
+      {DB} as unknown as Env, {} as ExecutionContext)
+    expect((await response.json()).guardian).toMatchObject({
+      halted: true, state_source: 'legacy_d1_global_flag', row_status, state_updated_at,
+      risk_cycle_verified: false, shared_clearance_verified: false,
+    })
+  })
+})

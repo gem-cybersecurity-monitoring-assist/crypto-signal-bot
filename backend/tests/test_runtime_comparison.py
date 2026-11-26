@@ -15,7 +15,9 @@ def fixture(now):
         "generated_at": datetime.fromtimestamp(now, timezone.utc).isoformat(),
         "runtime": {"trading_mode": "paper", "exchange_mode": "paper", "network": "testnet",
                     "allow_mainnet": False, "live_trading_enabled": False, "withdrawals_enabled": False},
-        "guardian": {"halted": False, "reason": None},
+        "guardian": {"halted": False, "reason": None, "state_source": "legacy_d1_global_flag",
+                     "row_status": "recorded", "state_updated_at": datetime.fromtimestamp(now - 1, timezone.utc).isoformat(),
+                     "risk_cycle_verified": False, "shared_clearance_verified": False},
         "projections": {"d1_status": "healthy"},
         "fast_path": {"authority": "legacy_d1"},
     }
@@ -172,3 +174,39 @@ def test_worker_nonpaper_observation_not_comparable():
     result = rc.worker_observation(payload, now)
     assert result["status"] == "runtime_unverified"
     assert result["halted"] is None
+
+
+@pytest.mark.parametrize("change", ["missing", "future", "naive", "wrong_scope", "invalid_row", "asserted_clearance"])
+def test_unproven_guardian_row_not_comparable(change):
+    now = time.time()
+    p = fixture(now)
+    guardian = p["guardian"]
+    if change == "missing":
+        del guardian["state_updated_at"]
+    elif change == "future":
+        guardian["state_updated_at"] = datetime.fromtimestamp(now + 1, timezone.utc).isoformat()
+    elif change == "naive":
+        guardian["state_updated_at"] = "2026-11-26T00:00:00"
+    elif change == "wrong_scope":
+        guardian["state_source"] = "unknown"
+    elif change == "invalid_row":
+        guardian["row_status"] = "invalid_timestamp"
+    else:
+        guardian["shared_clearance_verified"] = True
+    result = rc.worker_observation(p, now)
+    assert result["status"] == "provenance_unverified"
+    assert result["halted"] is None
+
+
+@pytest.mark.parametrize("halted", [False, True])
+def test_fresh_response_does_not_refresh_old_guardian_record(halted):
+    now = time.time()
+    p = fixture(now)
+    p["guardian"]["state_updated_at"] = datetime.fromtimestamp(now - 600, timezone.utc).isoformat()
+    p["guardian"]["halted"] = halted
+    result = rc.worker_observation(p, now)
+    assert result["status"] == "historical"
+    assert result["halted"] is (True if halted else None)
+    assert result["state_age_seconds"] == 600
+    assert result["risk_cycle_verified"] is False
+    assert rc.compare_observations({"status": "observed", "halted": halted}, result)["guardian_comparison"] == "not_reported"

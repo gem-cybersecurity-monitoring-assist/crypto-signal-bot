@@ -365,3 +365,23 @@ not verified; no last sequence. Exit 1. HTTP 451 confirms denial at the
 snapshot access boundary; the precise policy/legal rationale was not
 independently established. No further retries or circumvention. This is
 an external access dependency, not an authenticated exchange certification.
+
+## Guardian stored-record provenance
+Worker infrastructure status now reads the existing guardian_state.updated_at
+and validates the canonical SQLite UTC timestamp. It exposes the stored row
+source, timestamp and evidence status separately from the response timestamp;
+risk-cycle and shared clearance verification remain false. Python comparison
+requires the new provenance fields and refuses to treat historical clear flags
+as current observations. A recorded historical halt remains a halt observation
+and does not expire into clearance. A 30-second comparison-age cutoff matches
+the existing response observation window, not an expiry of Guardian policy or
+an evaluation heartbeat. Previous deployed responses without row provenance
+are explicitly unverified. No execution gate, state writer, reset behavior
+or production deployment was changed.
+Azure: 128 Worker contract/fast-path tests passed (four new Guardian cases);
+761 backend tests passed (eight new cases), 25 focused Guardian tests passed
+(overlap), Worker build, paper-safety, backend lint and architecture audit
+passed. Two pre-existing backend test warnings. Temporary Python test
+environment restored offline from 61 cached wheel archives (no provisioning).
+Production release attestation returned ok=true, failures=[], unchanged.
+The unified authoritative Guardian and atomic ledger remain incomplete.
