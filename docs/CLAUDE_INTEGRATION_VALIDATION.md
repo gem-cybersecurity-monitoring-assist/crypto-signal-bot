@@ -291,3 +291,21 @@ Worker TypeScript build and paper-safety checks passed. Prior checkpoint
 5a7c4032 passed Worker CI 45722916914. No authority, provider or deployment
 changes. Existing shared-feed, Guardian and ledger integration requirements
 remain open.
+
+## Symbol-bound shadow depth observation session
+Added DepthObservationSession to connect the existing Binance depth recovery
+helper and feed-health registry. Recovery invalidates prior observation
+timestamps; attempt IDs reject delayed snapshot responses, and symbol,
+source, receipt window and sequence are checked. A complete bridge updates
+sequence evidence only; a subsequent accepted stream event is required
+before reporting a market timestamp. Gaps start a new recovery, and invalid
+events, incomplete bridges and timeouts fail closed. Registry refuses
+recovery completion outside resyncing state. Five integration tests exercise
+normalization, recovery, gap handling, attempt isolation and timeout.
+Azure: 99 Worker contract/fast-path tests passed, Worker TypeScript build
+and paper-safety passed. Previous checkpoint 5d9e21e2 CI 45725350646 passed.
+The session is a local in-memory component, not a deployed transport. It
+does not authenticate provider snapshots, persist recovery evidence, or
+authorize any execution. The actual gateway, transport/session ownership,
+provider verification, shared authority, reviewed deployment and
+certification remain open.

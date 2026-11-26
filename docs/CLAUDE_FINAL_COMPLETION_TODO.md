@@ -255,3 +255,12 @@ Worker: https://crypto-signal-bot-api.analyzer-d94.workers.dev
 - [ ] Integrate the recovery helper into a running, authenticated, symbol-bound
   gateway with source-proven snapshot identity and durable recovery evidence.
   Existing helper validation is not proof of synchronized runtime state.
+
+## Shadow observation session increment
+- [x] Connect depth recovery and feed-health registry in a symbol-bound,
+  attempt-scoped local session; invalidate old observations during recovery.
+- [x] Verify 99 Worker tests, including five new integration cases, build
+  and paper-safety. Prior CI 45725350646 passed.
+- [ ] Integrate the local session into a verified transport owner; authenticate
+  provider snapshots, establish durable recovery evidence and verify end-to-end
+  gateway behavior. No running production gateway is claimed.

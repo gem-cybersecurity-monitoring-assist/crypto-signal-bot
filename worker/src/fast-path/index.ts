@@ -3,6 +3,7 @@ export * from './events'
 export * from './freshness'
 export * from './feed-health'
 export * from './recovery'
+export * from './depth-observation-session'
 export * from './normalizers/coinbase'
 export * from './normalizers/binance'
 

@@ -11,12 +11,13 @@ import {
 } from './types'
 
 type MutableFeedState = Omit<FeedHealthState, 'ephemeral'> & { ephemeral: true }
+type FeedIdentity = Pick<NormalizedMarketEvent, 'source' | 'channel' | 'symbol'>
 
 function copyState(state: MutableFeedState): FeedHealthState {
   return { ...state }
 }
 
-function initialState(event: NormalizedMarketEvent): MutableFeedState {
+function initialState(event: FeedIdentity): MutableFeedState {
   return {
     source: event.source,
     channel: event.channel,
@@ -142,9 +143,23 @@ export class FeedHealthRegistry {
     return { accepted: true, reason: 'accepted', state: copyState(state) }
   }
 
+  /** Invalidate observation timestamps before starting a new shadow recovery. */
+  beginRecovery(identity: FeedIdentity, nowMs: number): FeedHealthState {
+    const state = this.getOrCreate(feedKey(identity), identity)
+    state.lastReceivedTsMs = null
+    state.lastExchangeTsMs = null
+    state.sequenceState = 'gap'
+    state.recoveryState = 'resyncing'
+    state.recoveryStartedAtMs = nowMs
+    state.recoveryCompletedAtMs = null
+    state.lastErrorCode = 'SNAPSHOT_RECOVERY_REQUIRED'
+    this.refreshState(state, nowMs)
+    return copyState(state)
+  }
+
   markRecoveryHealthy(key: string, lastSequence: number, nowMs: number): FeedHealthState | null {
     const state = this.feeds.get(key)
-    if (!state || !Number.isSafeInteger(lastSequence) || lastSequence < (state.lastSequence ?? 0)) return null
+    if (!state || state.recoveryState !== 'resyncing' || !Number.isSafeInteger(lastSequence) || lastSequence < (state.lastSequence ?? 0)) return null
     state.lastReceivedTsMs = null
     state.lastExchangeTsMs = null
     state.lastSequence = lastSequence
@@ -186,7 +201,7 @@ export class FeedHealthRegistry {
     this.seenEventOrder.length = 0
   }
 
-  private getOrCreate(key: string, event: NormalizedMarketEvent): MutableFeedState {
+  private getOrCreate(key: string, event: FeedIdentity): MutableFeedState {
     const existing = this.feeds.get(key)
     if (existing) return existing
     if (this.feeds.size >= this.thresholds.maxTrackedFeeds) {
@@ -254,6 +269,7 @@ export class FeedHealthRegistry {
     if (state.recoveryState === 'resyncing' || state.sequenceState === 'gap') return 'resyncing'
     if (state.connectionState !== 'connected') return 'unavailable'
     if (state.sequenceState === 'out_of_order') return 'degraded'
+    if (state.lastReceivedTsMs === null || state.lastExchangeTsMs === null) return 'degraded'
     if (state.heartbeatState !== 'healthy') return 'degraded'
     return 'healthy'
   }
