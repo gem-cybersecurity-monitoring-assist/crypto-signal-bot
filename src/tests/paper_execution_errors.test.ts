@@ -1,9 +1,16 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
+const { sessionError } = vi.hoisted(() => ({ sessionError: { current: null as Error | null } }));
+
 vi.mock('@/integrations/supabase/client', () => ({
   SUPABASE_CONFIGURED: true,
   getSupabaseClient: async () => ({
-    auth: { getSession: async () => ({ data: { session: { access_token: 'session-token' } } }) },
+    auth: {
+      getSession: async () => ({
+        data: { session: { access_token: 'session-token' } },
+        error: sessionError.current,
+      }),
+    },
   }),
 }));
 
@@ -24,6 +31,7 @@ beforeAll(() => {
 });
 
 afterEach(() => {
+  sessionError.current = null;
   vi.unstubAllGlobals();
   vi.stubGlobal('window', globalThis);
 });
@@ -71,5 +79,52 @@ describe('paper intent request', () => {
     expect(headers.get('Authorization')).toBe('Bearer session-token');
     expect(headers.has('X-API-Key')).toBe(false);
     expect(init.credentials).toBe('omit');
+  });
+
+  it('surfaces identity-provider session lookup failures instead of sending an anonymous request', async () => {
+    sessionError.current = new Error('Identity provider unavailable');
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const error = await fetchBackendJson('/portfolio/summary').catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(FrontendBackendError);
+    expect((error as FrontendBackendError).code).toBe('AUTH_SESSION_UNAVAILABLE');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('distinguishes the Worker JSON 404 from an HTML SPA fallback', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      JSON.stringify({ error: 'Not found', path: '/portfolio/missing', ts: 1 }),
+      { status: 404, headers: { 'Content-Type': 'application/json' } },
+    )));
+
+    const workerNotFound = await fetchBackendJson('/portfolio/missing')
+      .catch((cause: unknown) => cause);
+    expect(workerNotFound).toBeInstanceOf(FrontendBackendError);
+    expect((workerNotFound as FrontendBackendError).code).toBe('API_ROUTE_NOT_FOUND');
+    expect((workerNotFound as FrontendBackendError).message).toContain('Worker API route');
+
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      '<!doctype html><html><body>Dashboard</body></html>',
+      { status: 200, headers: { 'Content-Type': 'text/html' } },
+    )));
+    const spaFallback = await fetchBackendJson('/portfolio/summary')
+      .catch((cause: unknown) => cause);
+    expect(spaFallback).toBeInstanceOf(FrontendBackendError);
+    expect((spaFallback as FrontendBackendError).code).toBe('SPA_FALLBACK_RESPONSE');
+    expect((spaFallback as FrontendBackendError).message).toContain('SPA fallback');
+  });
+
+  it('labels unauthenticated API responses distinctly', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      JSON.stringify({ error: 'Unauthorized' }),
+      { status: 401, headers: { 'Content-Type': 'application/json' } },
+    )));
+
+    const error = await fetchBackendJson('/portfolio/summary').catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(FrontendBackendError);
+    expect((error as FrontendBackendError).status).toBe(401);
+    expect((error as FrontendBackendError).code).toBe('AUTHENTICATION_REQUIRED');
   });
 });

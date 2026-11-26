@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, field_validator
 
 from backend.services.risk_gate.service import evaluate_order, RiskGateDecision
@@ -239,13 +239,17 @@ async def paper_reset(body: PaperResetRequest) -> PaperResetOut:
     and deactivates the kill switch if active.
     """
     from decimal import Decimal
-    from backend.services.portfolio.service import reset_portfolio
+    from backend.services.portfolio.service import (reset_portfolio, require_ephemeral_reset, PortfolioRecoveryError)
     from backend.services.guardian_bot.service import reset_counters, deactivate_kill_switch, get_guardian_status
     from backend.services.signal_executor.service import _last_acted
 
     reason = body.reason or "Paper portfolio manual reset"
 
-    # 1) reset portfolio in-memory state
+    # 1) Refuse RAM-only reset when durable ledger evidence exists.
+    try:
+        require_ephemeral_reset()
+    except PortfolioRecoveryError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     reset_portfolio(starting_cash=Decimal(str(body.starting_cash)))
 
     # 2) reset guardian — also anchor starting NAV to new cash so drawdown is 0%

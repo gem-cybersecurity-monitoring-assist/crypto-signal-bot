@@ -119,6 +119,17 @@ _portfolio_starting = False
 _SHUTDOWN_TIMEOUT = 15.0
 _fill_lock = asyncio.Lock()
 _state_revision = 0
+_recovery_blocked: Optional[str] = None   # set when durable state is ambiguous
+
+
+class PortfolioRecoveryError(RuntimeError):
+    """Durable paper state is incoherent or ambiguous; trading must stay blocked."""
+
+
+def require_ephemeral_reset() -> None:
+    """Never erase durable history or clear a recovery halt via a RAM-only reset."""
+    if _db_ready() or _recovery_blocked is not None or _portfolio_starting or _fill_lock.locked():
+        raise PortfolioRecoveryError("Durable portfolio reset requires a reviewed ledger migration")
 
 
 def _schedule_persistence(coro: Coroutine) -> None:
@@ -149,6 +160,8 @@ async def _next_tick(interval: float) -> bool:
 
 def reset_portfolio(starting_cash: Decimal = STARTING_CASH) -> None:
     global _cash, _lots, _orders, _trades, _trade_counter, _peak_equity, _state_revision
+    global _recovery_blocked
+    _recovery_blocked = None
     _state_revision += 1
     _cash = starting_cash
     _lots.clear()
@@ -192,21 +205,16 @@ def _usd(v) -> Decimal:
     return Decimal(str(v)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
-def _fifo_close(
-    symbol: str,
-    qty_to_close: Decimal,
-    fill_price: Decimal,
-) -> Tuple[Decimal, Decimal]:
-    """
-    FIFO close: consume lots, return (avg_cost_basis, realized_pnl).
-    Modifies _lots in place.
-    """
+def _fifo_consume(
+    lots: List[Lot], qty_to_close: Decimal, fill_price: Decimal,
+) -> Tuple[List[Lot], Decimal, Decimal]:
+    """Pure FIFO close: return (remaining_lots, avg_cost_basis, gross_realized)."""
     remaining = qty_to_close
     total_cost = Decimal("0")
     consumed   = Decimal("0")
     new_lots: List[Lot] = []
 
-    for lot in _lots.get(symbol, []):
+    for lot in lots:
         if remaining <= 0:
             new_lots.append(lot)
             continue
@@ -221,14 +229,50 @@ def _fifo_close(
                 opened_at=lot.opened_at, order_id=lot.order_id,
             ))
 
-    _lots[symbol] = new_lots
-
     if consumed == 0:
-        return Decimal("0"), Decimal("0")
+        return new_lots, Decimal("0"), Decimal("0")
 
     avg_cost = total_cost / consumed
     realized = fill_price * consumed - total_cost
-    return avg_cost, realized.quantize(PRECISION, rounding=ROUND_HALF_UP)
+    return new_lots, avg_cost, realized.quantize(PRECISION, rounding=ROUND_HALF_UP)
+
+
+def _fifo_close(
+    symbol: str,
+    qty_to_close: Decimal,
+    fill_price: Decimal,
+) -> Tuple[Decimal, Decimal]:
+    """FIFO close in place on _lots: return (avg_cost_basis, realized_pnl)."""
+    new_lots, avg_cost, realized = _fifo_consume(_lots.get(symbol, []), qty_to_close, fill_price)
+    _lots[symbol] = new_lots
+    return avg_cost, realized
+
+
+def _apply_fill(
+    cash: Decimal, lots: List[Lot], side: str, symbol: str, qty: Decimal,
+    price: Decimal, fee: Decimal, order_id: str, now: int,
+) -> Optional[Tuple[Decimal, List[Lot], Decimal]]:
+    """Pure ledger step shared by live fills and recovery replay.
+
+    Returns (new_cash, new_lots, realized_pnl) or None if the fill is invalid.
+    """
+    cost = qty * price
+    if side == "BUY":
+        total_cost = cost + fee
+        if total_cost > cash:
+            return None
+        return (
+            cash - total_cost,
+            list(lots) + [Lot(symbol=symbol, qty=qty, entry_price=price,
+                              opened_at=now, order_id=order_id)],
+            -fee,
+        )
+    if side == "SELL":
+        if fee > cost or qty > sum((l.qty for l in lots), Decimal("0")):
+            return None
+        new_lots, _, gross = _fifo_consume(lots, qty, price)
+        return cash + cost - fee, new_lots, gross - fee
+    return None
 
 
 def _get_position(symbol: str) -> PositionState:
@@ -282,7 +326,8 @@ async def submit_order(
     _orders[order.id] = order
 
     if (
-        order.account_id != _DEFAULT_ACCOUNT_ID
+        _recovery_blocked is not None
+        or order.account_id != _DEFAULT_ACCOUNT_ID
         or order.side not in ("BUY", "SELL")
         or order.order_type not in ("MARKET", "LIMIT")
         or not order.qty.is_finite() or order.qty <= 0
@@ -296,7 +341,8 @@ async def submit_order(
         order.status = "CANCELLED"
         order.updated_at = int(time.time())
 
-    await _persist_order(order)
+    if _recovery_blocked is None and order.status != "FILLED":
+        await _persist_order(order)
     return order
 
 
@@ -333,16 +379,20 @@ async def _fill_order(order: OrderState) -> None:
 
 
 async def _fill_order_locked(order: OrderState) -> None:
-    global _cash, _peak_equity, _trade_counter, _state_revision
+    global _cash, _peak_equity, _trade_counter, _state_revision, _recovery_blocked
 
     if order.status != "PENDING":
         return
     revision = _state_revision
 
     def cancel() -> None:
-        if order.status == "PENDING":
+        if order.status in ("PENDING", "FILLING"):
             order.status = "CANCELLED"
             order.updated_at = int(time.time())
+
+    if _recovery_blocked is not None or any(t.order_id == order.id for t in _trades):
+        cancel()  # blocked, or duplicate fill identity
+        return
 
     try:
         snap = await get_price(order.symbol)
@@ -384,42 +434,53 @@ async def _fill_order_locked(order: OrderState) -> None:
         return
     cost = order.qty * fill_price
     fee = (cost * FEE_RATE).quantize(PRECISION, rounding=ROUND_HALF_UP)
-    if order.side == "BUY":
-        total_cost = cost + fee
-        if total_cost > _cash:
-            cancel()
-            return
-        _cash -= total_cost
-        _lots[order.symbol].append(Lot(
-            symbol=order.symbol, qty=order.qty, entry_price=fill_price,
-            opened_at=now, order_id=order.id,
-        ))
-        # Record acquisition fees as realized expenses. Historic trade rows
-        # are not rewritten by this change.
-        realized_pnl = -fee
-    else:
-        if fee > cost:
-            cancel()
-            return
-        _, gross_pnl = _fifo_close(order.symbol, order.qty, fill_price)
-        realized_pnl = gross_pnl - fee
-        _cash += cost - fee
-
-    order.status = "FILLED"
-    order.updated_at = now
-    _trade_counter += 1
-    _state_revision += 1
+    # Stage the whole ledger mutation without touching live state, commit it
+    # durably, and only then publish it in memory. Acquisition fees are
+    # recorded as realized expenses (realized_pnl = -fee on BUY).
+    applied = _apply_fill(_cash, _lots.get(order.symbol, []), order.side, order.symbol,
+                          order.qty, fill_price, fee, order.id, now)
+    if applied is None:
+        cancel()
+        return
+    new_cash, new_lots, realized_pnl = applied
     trade = TradeState(
-        id=_trade_counter, order_id=order.id, account_id=order.account_id,
+        id=_trade_counter + 1, order_id=order.id, account_id=order.account_id,
         symbol=order.symbol, qty=order.qty, price=fill_price, fee=fee,
         side=order.side, realized_pnl=realized_pnl, executed_at=now,
     )
+    # "FILLING" blocks cancel_pending_order while the commit is awaited.
+    order.status = "FILLING"
+    order.updated_at = now
+    try:
+        await _commit_fill(order, trade, new_cash, new_lots)
+    except asyncio.CancelledError:
+        _recovery_blocked = "Cancelled during durable fill commit; reconcile before resuming"
+        order.status = "FILLING"
+        raise
+    except Exception as exc:
+        # A timeout/disconnect can occur after a database commit. Do not claim
+        # rollback, or let subsequent best-effort persistence overwrite it.
+        _recovery_blocked = "Durable fill outcome requires reconciliation"
+        log.warning("[portfolio] atomic fill outcome unverified: %s", type(exc).__name__)
+        from sqlalchemy.exc import IntegrityError
+        if isinstance(exc, IntegrityError):
+            cancel()  # database rejected the transaction
+        else:
+            # A lost commit response is not a confirmed cancellation.
+            order.status = "FILLING"
+        return
+
+    order.status = "FILLED"
+    _cash = new_cash
+    _lots[order.symbol] = new_lots
+    _trade_counter = trade.id
+    _state_revision += 1
     _trades.append(trade)
-    _schedule_persistence(_upsert_position(order.symbol, order.account_id))
-    await _persist_trade(trade)
     try:
         equity = await _compute_equity()
-        _peak_equity = max(_peak_equity, equity)
+        if equity > _peak_equity:
+            _peak_equity = equity
+            await _persist_peak(order.account_id, _peak_equity)
     except PortfolioValuationUnavailable:
         log.warning("[portfolio] marked equity unavailable after paper fill")
     log.info("[portfolio] paper fill %s %s", order.side, order.symbol)
@@ -431,6 +492,8 @@ async def _fill_order_locked(order: OrderState) -> None:
 
 async def _marked_portfolio() -> tuple[Decimal, Decimal, Decimal, list[dict]]:
     """One complete mark set for cash, equity, P&L and position breakdown."""
+    if _recovery_blocked is not None:
+        raise PortfolioValuationUnavailable("Portfolio recovery blocked")
     revision = _state_revision
     cash = _cash
     lots_by_symbol = {symbol: tuple(lots) for symbol, lots in _lots.items() if lots}
@@ -472,6 +535,8 @@ async def get_portfolio_summary(account_id: str = _DEFAULT_ACCOUNT_ID) -> dict:
     global _peak_equity
     if account_id != _DEFAULT_ACCOUNT_ID:
         raise PortfolioValuationUnavailable("Portfolio account scope unavailable")
+    if _recovery_blocked is not None:
+        raise PortfolioValuationUnavailable("Portfolio recovery blocked")
     now = int(time.time())
     cash, equity, unrealized, positions = await _marked_portfolio()
     _peak_equity = max(_peak_equity, equity)
@@ -593,10 +658,12 @@ async def _limit_fill_loop() -> None:
                 limit = order.price
                 if order.side == "BUY"  and mark <= limit:
                     await _fill_order(order)
-                    await _persist_order(order)
+                    if _recovery_blocked is None and order.status != "FILLED":
+                        await _persist_order(order)
                 elif order.side == "SELL" and mark >= limit:
                     await _fill_order(order)
-                    await _persist_order(order)
+                    if _recovery_blocked is None and order.status != "FILLED":
+                        await _persist_order(order)
             except Exception as exc:
                 log.debug("limit fill check error %s: %s", order.id[:8], exc)
 
@@ -629,22 +696,107 @@ async def _persist_order(order: OrderState) -> None:
         log.debug("order persist error (non-fatal): %s", exc)
 
 
-async def _persist_trade(trade: TradeState) -> None:
+def _db_ready() -> bool:
+    """True once init_db() has published a session factory."""
+    from backend.db import session as db_session
+    return db_session._session_factory is not None
+
+
+def _fill_key(order_id: str) -> str:
+    return f"fill:{order_id}"
+
+
+async def _commit_fill(
+    order: OrderState, trade: TradeState, new_cash: Decimal, new_lots: List[Lot],
+) -> None:
+    """Persist order, trade, position and account state in ONE transaction.
+
+    Raises on any failure (including a duplicate fill key); nothing is partially
+    written. Skipped only when no database was initialised (in-memory mode).
+    """
+    if not _db_ready():
+        if _portfolio_starting or _portfolio_tasks or _recovery_blocked is not None:
+            raise PortfolioRecoveryError("Durable portfolio database unavailable")
+        return  # isolated in-process test compatibility only
+    from backend.db.session import get_session
+    from backend.db.models import (
+        PaperAccountStateRecord, PaperOrderRecord, PositionRecord2, TradeRecord,
+    )
+    from sqlalchemy import select
+
+    symbol, account_id = trade.symbol, trade.account_id
+    realized_total = sum(
+        (t.realized_pnl for t in _trades
+         if t.symbol == symbol and t.realized_pnl is not None), Decimal("0"),
+    ) + (trade.realized_pnl or Decimal("0"))
+    qty = sum((l.qty for l in new_lots), Decimal("0"))
+    avg = (sum((l.qty * l.entry_price for l in new_lots), Decimal("0")) / qty) if qty > 0 else Decimal("0")
+
+    async with get_session() as session:
+        async with session.begin():
+            rec = await session.get(PaperOrderRecord, order.id)
+            if rec:
+                rec.status = "FILLED"
+                rec.qty = float(order.qty)
+                rec.updated_at = order.updated_at
+            else:
+                session.add(PaperOrderRecord(
+                    id=order.id, account_id=order.account_id, symbol=order.symbol,
+                    side=order.side, order_type=order.order_type, qty=float(order.qty),
+                    price=float(order.price) if order.price else None,
+                    status="FILLED", mode=order.mode,
+                    created_at=order.created_at, updated_at=order.updated_at,
+                ))
+            session.add(TradeRecord(
+                id=trade.id, order_id=trade.order_id, account_id=account_id,
+                symbol=symbol, qty=float(trade.qty), price=float(trade.price),
+                fee=float(trade.fee), side=trade.side,
+                realized_pnl=float(trade.realized_pnl) if trade.realized_pnl is not None else None,
+                executed_at=trade.executed_at, fill_key=_fill_key(trade.order_id),
+                qty_text=str(trade.qty), price_text=str(trade.price), fee_text=str(trade.fee),
+                realized_pnl_text=str(trade.realized_pnl), cash_after_text=str(new_cash),
+            ))
+            pos = (await session.execute(select(PositionRecord2).where(
+                PositionRecord2.account_id == account_id, PositionRecord2.symbol == symbol,
+            ))).scalar_one_or_none()
+            if qty <= 0:
+                if pos:
+                    await session.delete(pos)
+            elif pos:
+                pos.qty, pos.avg_entry_price = float(qty), float(avg)
+                pos.realized_pnl, pos.updated_at = float(realized_total), trade.executed_at
+            else:
+                session.add(PositionRecord2(
+                    account_id=account_id, symbol=symbol, qty=float(qty),
+                    avg_entry_price=float(avg), realized_pnl=float(realized_total),
+                    unrealized_pnl=0.0, updated_at=trade.executed_at,
+                ))
+            state = await session.get(PaperAccountStateRecord, account_id)
+            if state:
+                state.cash_text, state.trade_counter = str(new_cash), trade.id
+                state.updated_at = trade.executed_at
+            else:
+                session.add(PaperAccountStateRecord(
+                    account_id=account_id, cash_text=str(new_cash),
+                    peak_equity_text=str(_peak_equity), trade_counter=trade.id,
+                    updated_at=trade.executed_at,
+                ))
+
+
+async def _persist_peak(account_id: str, peak: Decimal) -> None:
+    """Monotonic peak update; snapshots also carry max_equity as evidence."""
+    if not _db_ready():
+        return
     try:
         from backend.db.session import get_session
-        from backend.db.models import TradeRecord
+        from backend.db.models import PaperAccountStateRecord
         async with get_session() as session:
-            session.add(TradeRecord(
-                order_id=trade.order_id, account_id=trade.account_id,
-                symbol=trade.symbol, qty=float(trade.qty),
-                price=float(trade.price), fee=float(trade.fee),
-                side=trade.side,
-                realized_pnl=float(trade.realized_pnl) if trade.realized_pnl is not None else None,
-                executed_at=trade.executed_at,
-            ))
-            await session.commit()
+            async with session.begin():
+                state = await session.get(PaperAccountStateRecord, account_id)
+                if state and peak > Decimal(state.peak_equity_text):
+                    state.peak_equity_text = str(peak)
     except Exception as exc:
-        log.debug("trade persist error (non-fatal): %s", exc)
+        log.warning("[portfolio] peak persist failed: %s", type(exc).__name__)
 
 
 async def _persist_snapshot(snap: EquitySnapshot) -> None:
@@ -673,8 +825,16 @@ async def start_portfolio_service(app) -> None:
     if _portfolio_starting or any(not task.done() for task in _portfolio_tasks):
         return
     _portfolio_starting = True
+    global _recovery_blocked
     try:
-        await restore_portfolio_state()
+        try:
+            await restore_portfolio_state()
+            _recovery_blocked = None
+        except Exception as exc:
+            # Fail closed: no loops, no fills, no valuation from guessed state.
+            _recovery_blocked = f"{type(exc).__name__}: {exc}"
+            log.error("[portfolio] recovery blocked, paper trading disabled: %s", exc)
+            raise
         _portfolio_stop = asyncio.Event()
         _portfolio_tasks.clear()
         _portfolio_tasks.update((
@@ -829,6 +989,8 @@ async def get_positions_detail() -> List[dict]:
     """
     Return open positions with full PnL breakdown (unrealized + realized).
     """
+    if _recovery_blocked is not None:
+        raise PortfolioValuationUnavailable("Portfolio recovery blocked")
     positions = []
     revision = _state_revision
     for symbol, lots in tuple(_lots.items()):
@@ -972,129 +1134,123 @@ def cancel_pending_order(order_id: str) -> bool:
 # DB state persistence — positions upsert + startup restore
 # ─────────────────────────────────────────────────────────────────
 
-async def _upsert_position(symbol: str, account_id: str = _DEFAULT_ACCOUNT_ID) -> None:
-    """Upsert the open position for `symbol` into paper_positions DB table."""
-    try:
-        from backend.db.session import get_session
-        from backend.db.models import PositionRecord2
-        from sqlalchemy import select
-
-        lots = _lots.get(symbol, [])
-        qty = float(sum(l.qty for l in lots))
-
-        async with get_session() as session:
-            stmt = select(PositionRecord2).where(
-                PositionRecord2.account_id == account_id,
-                PositionRecord2.symbol == symbol,
-            )
-            result = await session.execute(stmt)
-            rec = result.scalar_one_or_none()
-
-            avg_entry = 0.0
-            if lots:
-                total_cost = sum(float(l.qty) * float(l.entry_price) for l in lots)
-                avg_entry = total_cost / qty if qty > 0 else 0.0
-
-            if qty <= 0 and rec:
-                await session.delete(rec)
-            elif qty > 0:
-                if rec:
-                    rec.qty = qty
-                    rec.avg_entry_price = avg_entry
-                    rec.updated_at = int(time.time())
-                else:
-                    session.add(PositionRecord2(
-                        account_id=account_id, symbol=symbol,
-                        qty=qty, avg_entry_price=avg_entry,
-                        realized_pnl=0.0, unrealized_pnl=0.0,
-                    ))
-            await session.commit()
-    except Exception as exc:
-        log.debug("[portfolio] position upsert error (non-fatal): %s", exc)
+def _replay_ledger(trade_rows, account_id: str):
+    """Rebuild exact cash/lots/trades from durable fills; raise if incoherent."""
+    cash, lots_by_sym, trades = STARTING_CASH, {}, []
+    expected_id = 0
+    for row in sorted(trade_rows, key=lambda r: r.id):
+        expected_id += 1
+        if row.id != expected_id:
+            raise PortfolioRecoveryError(f"trade id gap before {row.id}")
+        texts = (row.qty_text, row.price_text, row.fee_text, row.realized_pnl_text, row.cash_after_text)
+        if row.fill_key != _fill_key(row.order_id or "") or any(t is None for t in texts):
+            raise PortfolioRecoveryError(f"trade {row.id} lacks exact ledger evidence (legacy row)")
+        try:
+            qty, price, fee, realized, cash_after = (Decimal(t) for t in texts)
+        except Exception as exc:
+            raise PortfolioRecoveryError(f"trade {row.id} has malformed decimals") from exc
+        if (row.side not in ("BUY", "SELL") or not all(v.is_finite() for v in (qty, price, fee, cash_after))
+                or qty <= 0 or price <= 0 or fee < 0):
+            raise PortfolioRecoveryError(f"trade {row.id} invalid")
+        applied = _apply_fill(cash, lots_by_sym.get(row.symbol, []), row.side, row.symbol,
+                              qty, price, fee, row.order_id, row.executed_at)
+        if applied is None:
+            raise PortfolioRecoveryError(f"trade {row.id} cannot be replayed (cash/inventory)")
+        cash, lots_by_sym[row.symbol], replay_realized = applied
+        if cash != cash_after or replay_realized != realized:
+            raise PortfolioRecoveryError(f"trade {row.id} cash/realized disagree with replay")
+        trades.append(TradeState(
+            id=row.id, order_id=row.order_id, account_id=account_id, symbol=row.symbol,
+            qty=qty, price=price, fee=fee, side=row.side, realized_pnl=realized,
+            executed_at=row.executed_at,
+        ))
+    return cash, {s: l for s, l in lots_by_sym.items() if l}, trades
 
 
 async def restore_portfolio_state(account_id: str = _DEFAULT_ACCOUNT_ID) -> None:
+    """Restore exact FIFO lots, cash, peak and counter from coherent durable fills.
+
+    Source of truth is the trades table replayed in id order; account state,
+    positions and orders are cross-checked. Any disagreement or legacy/ambiguous
+    row raises PortfolioRecoveryError and leaves in-memory state untouched.
+    Fresh (empty) databases start from STARTING_CASH. Startup without an
+    initialized durable database is blocked.
     """
-    Restore in-memory portfolio state from DB on startup.
+    global _cash, _peak_equity, _trade_counter, _state_revision
+    if not _db_ready():
+        raise PortfolioRecoveryError("Durable portfolio database unavailable")
 
-    Loads:
-      1. Latest equity snapshot → _cash, _peak_equity
-      2. Open positions (paper_positions) → _lots
-      3. Trades (trade_records) → _trades, _trade_counter
+    from backend.db.session import get_session
+    from backend.db.models import (
+        EquitySnapshotRecord, PaperAccountStateRecord, PaperOrderRecord,
+        PositionRecord2, TradeRecord,
+    )
+    from sqlalchemy import select
 
-    Safe to call on a fresh DB (no-op if tables are empty).
-    """
-    global _cash, _peak_equity, _trade_counter
+    async with get_session() as session:
+        trade_rows = (await session.execute(
+            select(TradeRecord).where(TradeRecord.account_id == account_id))).scalars().all()
+        state = await session.get(PaperAccountStateRecord, account_id)
+        positions = (await session.execute(select(PositionRecord2).where(
+            PositionRecord2.account_id == account_id, PositionRecord2.qty > 0))).scalars().all()
+        orders = (await session.execute(
+            select(PaperOrderRecord).where(PaperOrderRecord.account_id == account_id))).scalars().all()
+        snaps = (await session.execute(select(EquitySnapshotRecord).where(
+            EquitySnapshotRecord.account_id == account_id))).scalars().all()
 
-    try:
-        from backend.db.session import get_session
-        from backend.db.models import EquitySnapshotRecord, PositionRecord2, TradeRecord
-        from sqlalchemy import select, desc
+    cash, lots, trades = _replay_ledger(trade_rows, account_id)
+    counter = trades[-1].id if trades else 0
+    peak = STARTING_CASH
+    if trades or state is not None:
+        if state is None:
+            raise PortfolioRecoveryError("trades exist without paper account state")
+        try:
+            state_cash, state_peak = Decimal(state.cash_text), Decimal(state.peak_equity_text)
+        except Exception as exc:
+            raise PortfolioRecoveryError("malformed paper account state") from exc
+        if state_cash != cash or state.trade_counter != counter or not state_peak.is_finite() or state_peak <= 0:
+            raise PortfolioRecoveryError("paper account state disagrees with trade replay")
+        peak = state_peak
+    elif snaps:
+        latest = max(snaps, key=lambda s: s.timestamp or 0)
+        if Decimal(str(latest.cash)) != STARTING_CASH:
+            raise PortfolioRecoveryError("snapshot cash without fill evidence")
+    for s in snaps:
+        peak = max(peak, Decimal(str(s.max_equity)))
 
-        async with get_session() as session:
+    # Positions table must match the replayed inventory exactly (by symbol/qty).
+    stored = {p.symbol: p for p in positions}
+    if set(stored) != set(lots):
+        raise PortfolioRecoveryError("paper_positions symbols disagree with replay")
+    for sym, p in stored.items():
+        total = sum((l.qty for l in lots[sym]), Decimal("0"))
+        if abs(Decimal(str(p.qty)) - total) > Decimal("1e-6") * max(Decimal(1), total):
+            raise PortfolioRecoveryError(f"paper_positions qty for {sym} disagrees with replay")
 
-            # 1. Latest equity snapshot → cash + peak
-            snap_stmt = (
-                select(EquitySnapshotRecord)
-                .where(EquitySnapshotRecord.account_id == account_id)
-                .order_by(desc(EquitySnapshotRecord.timestamp))
-                .limit(1)
-            )
-            snap_row = (await session.execute(snap_stmt)).scalar_one_or_none()
-            if snap_row:
-                _cash = Decimal(str(snap_row.cash))
-                _peak_equity = Decimal(str(snap_row.max_equity))
-                log.info("[portfolio] restored cash=%.2f peak=%.2f from DB snapshot",
-                         float(_cash), float(_peak_equity))
+    # Orders: FILLED orders and trades must pair one-to-one; keep PENDING limits.
+    filled_ids = {o.id for o in orders if o.status == "FILLED"}
+    if filled_ids != {t.order_id for t in trades}:
+        raise PortfolioRecoveryError("filled orders and trades disagree")
+    pending: Dict[str, OrderState] = {}
+    for o in orders:
+        if o.status != "PENDING":
+            continue
+        if o.order_type != "LIMIT" or o.side not in ("BUY", "SELL") or not o.price or o.qty <= 0:
+            raise PortfolioRecoveryError(f"pending order {o.id} is malformed")
+        pending[o.id] = OrderState(
+            id=o.id, account_id=o.account_id, symbol=o.symbol, side=o.side,
+            order_type=o.order_type, qty=_qty(o.qty), price=_qty(o.price), status="PENDING",
+            mode=o.mode or "paper", created_at=o.created_at or 0, updated_at=o.updated_at or 0,
+        )
 
-            # 2. Open positions → rebuild _lots
-            pos_stmt = select(PositionRecord2).where(
-                PositionRecord2.account_id == account_id,
-                PositionRecord2.qty > 0,
-            )
-            positions = (await session.execute(pos_stmt)).scalars().all()
-            restored_syms = []
-            for pos in positions:
-                if pos.qty > 0:
-                    _lots[pos.symbol] = [
-                        Lot(
-                            symbol=pos.symbol,
-                            qty=Decimal(str(pos.qty)),
-                            entry_price=Decimal(str(pos.avg_entry_price)),
-                            opened_at=pos.updated_at or int(time.time()),
-                            order_id="restored",
-                        )
-                    ]
-                    restored_syms.append(f"{pos.symbol}({pos.qty:.4f})")
-            if restored_syms:
-                log.info("[portfolio] restored %d positions: %s",
-                         len(restored_syms), ", ".join(restored_syms))
-
-            # 3. Recent trades → restore counter + history (last 500)
-            trade_stmt = (
-                select(TradeRecord)
-                .where(TradeRecord.account_id == account_id)
-                .order_by(desc(TradeRecord.executed_at))
-                .limit(500)
-            )
-            trade_rows = (await session.execute(trade_stmt)).scalars().all()
-            if trade_rows:
-                _trade_counter = max(t.id for t in trade_rows if hasattr(t, 'id') and t.id) or len(trade_rows)
-                for t in reversed(trade_rows):  # chronological order
-                    _trades.append(TradeState(
-                        id=getattr(t, 'id', 0) or 0,
-                        order_id=t.order_id or "",
-                        account_id=t.account_id,
-                        symbol=t.symbol,
-                        qty=Decimal(str(t.qty)),
-                        price=Decimal(str(t.price)),
-                        fee=Decimal(str(t.fee)) if t.fee else Decimal("0"),
-                        side=t.side,
-                        realized_pnl=Decimal(str(t.realized_pnl)) if t.realized_pnl is not None else None,
-                        executed_at=t.executed_at,
-                    ))
-                log.info("[portfolio] restored %d trades, trade_counter=%d",
-                         len(trade_rows), _trade_counter)
-
-    except Exception as exc:
-        log.warning("[portfolio] state restore failed (starting fresh): %s", exc)
+    # Publish only after every check passed.
+    _state_revision += 1
+    _cash, _peak_equity, _trade_counter = cash, peak, counter
+    _lots.clear()
+    for sym, l in lots.items():
+        _lots[sym] = l
+    _trades[:] = trades
+    _orders.clear()
+    _orders.update(pending)
+    log.info("[portfolio] restored %d trades, %d positions, %d pending orders",
+             len(trades), len(lots), len(pending))

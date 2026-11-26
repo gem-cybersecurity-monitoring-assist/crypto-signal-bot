@@ -1,6 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
-import { fetchBackendJson } from '@/lib/backend';
-import { usePortfolio } from '@/hooks/usePortfolio';
+import { describePortfolioLoadError, usePortfolio } from '@/hooks/usePortfolio';
 import {
   Wallet,
   TrendingUp,
@@ -11,11 +9,6 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
-
-interface PriceData {
-  price: number;
-  change24h: number;
-}
 
 function numberFmt(value: number, decimals = 2): string {
   return value.toLocaleString(undefined, {
@@ -51,50 +44,11 @@ function StatCard({
 }
 
 export default function Portfolio() {
-  const { portfolio, isLoading, refetch } = usePortfolio(15000);
-  const [prices, setPrices] = useState<Record<string, PriceData>>({});
-  const [pricesLoading, setPricesLoading] = useState(false);
-
-  const fetchPrices = useCallback(async (symbols: string[]) => {
-    if (symbols.length === 0) return;
-    setPricesLoading(true);
-    const results: Record<string, PriceData> = {};
-    await Promise.allSettled(
-      symbols.map(async (sym) => {
-        try {
-          const data = await fetchBackendJson<{ price: number; change24h: number }>(
-            `/price?symbol=${sym}USDT`
-          );
-          results[sym] = { price: data.price, change24h: data.change24h ?? 0 };
-        } catch {
-          // skip — price unavailable for this symbol
-        }
-      })
-    );
-    setPrices((prev) => ({ ...prev, ...results }));
-    setPricesLoading(false);
-  }, []);
-
-  useEffect(() => {
-    if (portfolio?.positions) {
-      const symbols = Object.keys(portfolio.positions).filter(
-        (s) => s !== 'USDT' && portfolio.positions[s] > 0
-      );
-      if (symbols.length > 0) fetchPrices(symbols);
-    }
-  }, [portfolio?.positions, fetchPrices]);
-
-  const cashBalance = portfolio?.balances?.USDT ?? 0;
+  const { portfolio, isLoading, error, refetch } = usePortfolio(15000);
+  const cashBalance = portfolio?.cashUsdt ?? null;
   const openPositions = portfolio
     ? Object.entries(portfolio.positions).filter(([sym, qty]) => sym !== 'USDT' && qty > 0)
     : [];
-
-  const totalPositionValue = openPositions.reduce((sum, [sym, qty]) => {
-    const p = prices[sym];
-    return sum + (p ? qty * p.price : 0);
-  }, 0);
-
-  const totalEquity = cashBalance + totalPositionValue;
 
   const recentOrders = portfolio
     ? [...portfolio.orders].sort((a, b) => b.created_at - a.created_at).slice(0, 20)
@@ -126,32 +80,50 @@ export default function Portfolio() {
           </Button>
         </div>
 
+        <p role="note" className="mb-6 rounded-md border border-warning/40 bg-warning/10 p-3 text-xs leading-relaxed text-warning">
+          Sign-in gates this frontend page, but the current Worker portfolio and order read routes do not verify the Supabase session or isolate data by owner. Treat these as shared paper-runtime records, not a private account portfolio.
+        </p>
+
+        {error && (
+          <div role="alert" className="cyber-card mb-6 border-destructive/50 bg-destructive/10 p-4">
+            <p className="font-mono text-sm text-destructive">{describePortfolioLoadError(error)}</p>
+            {error.status && (
+              <p className="mt-1 font-mono text-xs text-destructive/70">API response: HTTP {error.status}</p>
+            )}
+          </div>
+        )}
+
         {/* Summary Stats */}
         <div className="grid gap-4 sm:grid-cols-3 mb-6">
           <StatCard
             label="Total Equity"
             icon={BarChart3}
             value={
-              isLoading ? '...' : `$${numberFmt(totalEquity)}`
+              isLoading ? '...' : portfolio?.valuationAvailable && portfolio.equityUsdt !== null
+                ? `$${numberFmt(portfolio.equityUsdt)}`
+                : 'Unavailable'
             }
           />
           <StatCard
             label="Cash (USDT)"
             icon={Wallet}
             value={
-              isLoading ? '...' : `$${numberFmt(cashBalance)}`
+              isLoading ? '...' : cashBalance !== null ? `$${numberFmt(cashBalance)}` : 'Unavailable'
             }
           />
           <StatCard
             label="Positions Value"
             icon={TrendingUp}
             value={
-              isLoading || pricesLoading
-                ? '...'
-                : `$${numberFmt(totalPositionValue)}`
+              isLoading ? '...' : portfolio?.valuationAvailable && portfolio.positionsValueUsdt !== null
+                ? `$${numberFmt(portfolio.positionsValueUsdt)}`
+                : 'Unavailable'
             }
           />
         </div>
+        <p className="mb-6 text-xs text-muted-foreground">
+          Equity and position marks are reported by the Worker. This API response does not attest to price freshness or provider provenance.
+        </p>
 
         {/* Open Positions */}
         <section className="cyber-card p-5 mb-6">
@@ -170,10 +142,14 @@ export default function Portfolio() {
           ) : openPositions.length === 0 ? (
             <div className="py-8 text-center">
               <Wallet className="mx-auto h-8 w-8 text-muted-foreground/40 mb-3" />
-              <p className="font-mono text-sm text-muted-foreground">No open positions</p>
-              <p className="font-mono text-xs text-muted-foreground/60 mt-1">
-                Execute a paper trade from the dashboard to see positions here.
+              <p className="font-mono text-sm text-muted-foreground">
+                {error || !portfolio ? 'Position data unavailable' : 'No open positions'}
               </p>
+              {!error && portfolio && (
+                <p className="font-mono text-xs text-muted-foreground/60 mt-1">
+                  Execute a paper trade from the dashboard to see positions here.
+                </p>
+              )}
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -184,13 +160,12 @@ export default function Portfolio() {
                     <th className="pb-2 pr-4 font-medium text-right">Quantity</th>
                     <th className="pb-2 pr-4 font-medium text-right">Price</th>
                     <th className="pb-2 pr-4 font-medium text-right">Value</th>
-                    <th className="pb-2 pr-4 font-medium text-right">24h Change</th>
+                    <th className="pb-2 pr-4 font-medium text-right">Unrealized P&amp;L</th>
                   </tr>
                 </thead>
                 <tbody>
                   {openPositions.map(([symbol, quantity]) => {
-                    const p = prices[symbol];
-                    const value = p ? quantity * p.price : null;
+                    const mark = portfolio?.positionMarks[symbol];
                     return (
                       <tr key={symbol} className="border-b border-border/30 text-xs">
                         <td className="py-2.5 pr-4">
@@ -203,13 +178,19 @@ export default function Portfolio() {
                           {numberFmt(quantity, 6)}
                         </td>
                         <td className="py-2.5 pr-4 text-right font-mono text-foreground">
-                          {p ? `$${numberFmt(p.price)}` : '—'}
+                          {mark?.currentPrice !== null && mark?.currentPrice !== undefined
+                            ? `$${numberFmt(mark.currentPrice)}`
+                            : '—'}
                         </td>
                         <td className="py-2.5 pr-4 text-right font-mono text-foreground">
-                          {value !== null ? `$${numberFmt(value)}` : '—'}
+                          {mark?.marketValueUsdt !== null && mark?.marketValueUsdt !== undefined
+                            ? `$${numberFmt(mark.marketValueUsdt)}`
+                            : '—'}
                         </td>
                         <td className="py-2.5 pr-4 text-right">
-                          {p ? <PnlText value={p.change24h} suffix="%" /> : <span className="text-muted-foreground">—</span>}
+                          {mark?.unrealizedPnl !== null && mark?.unrealizedPnl !== undefined
+                            ? <PnlText value={mark.unrealizedPnl} />
+                            : <span className="text-muted-foreground">—</span>}
                         </td>
                       </tr>
                     );

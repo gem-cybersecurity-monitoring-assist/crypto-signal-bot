@@ -4,7 +4,12 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { describePaperExecutionError, fetchBackendJson } from '@/lib/backend';
 import { toast } from 'sonner';
-import type { PortfolioState, PaperOrder } from '@/hooks/usePortfolio';
+import {
+  describePortfolioLoadError,
+  type PortfolioLoadError,
+  type PortfolioState,
+  type PaperOrder,
+} from '@/hooks/usePortfolio';
 import { Signal, RiskAssessment } from '@/types/crypto';
 import {
   Dialog,
@@ -123,6 +128,7 @@ function statusColor(status: string): string {
 
 interface PortfolioPanelProps {
   portfolio: PortfolioState | null;
+  portfolioError?: PortfolioLoadError | null;
   isLoading?: boolean;
   selectedSymbol?: string;
   selectedPrice?: number;
@@ -135,6 +141,7 @@ interface PortfolioPanelProps {
 
 export function PortfolioPanel({
   portfolio,
+  portfolioError,
   isLoading,
   selectedSymbol = 'BTC',
   selectedPrice = 0,
@@ -160,7 +167,7 @@ export function PortfolioPanel({
   }
 
   const selectedAsset = selectedSymbol.toUpperCase().replace(/[-/](USDT|USD)$/i, '').replace(/(USDT|USD)$/i, '').trim();
-  const usdt = portfolio?.balances?.USDT ?? 0;
+  const usdt = portfolio?.cashUsdt ?? null;
   const nonUsdtBalances = Object.entries(portfolio?.balances ?? {}).filter(
     ([k, v]) => k !== 'USDT' && v > 0
   );
@@ -207,11 +214,28 @@ export function PortfolioPanel({
         )}
       </div>
 
+      {portfolioError && (
+        <p role="alert" className="mb-4 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive">
+          {describePortfolioLoadError(portfolioError)}
+        </p>
+      )}
+      <p role="note" className="mb-4 text-[10px] leading-relaxed text-warning">
+        Worker portfolio and order reads are shared paper-runtime records; these routes do not verify the Supabase session or isolate data by owner.
+      </p>
+
       <div className="space-y-2 mb-4">
+        <div className="flex justify-between items-center">
+          <span className="text-xs text-muted-foreground font-mono">Reported equity</span>
+          <span className="text-sm font-mono font-semibold text-foreground">
+            {portfolio?.valuationAvailable && portfolio.equityUsdt !== null
+              ? currency.format(portfolio.equityUsdt)
+              : 'Unavailable'}
+          </span>
+        </div>
         <div className="flex justify-between items-center">
           <span className="text-xs text-muted-foreground font-mono">USDT</span>
           <span className="text-sm font-mono font-semibold text-foreground">
-            {currency.format(usdt)}
+            {usdt === null ? 'Unavailable' : currency.format(usdt)}
           </span>
         </div>
         {nonUsdtBalances.map(([asset, qty]) => (
@@ -221,9 +245,14 @@ export function PortfolioPanel({
           </div>
         ))}
         {nonUsdtBalances.length === 0 && (
-          <p className="text-xs text-muted-foreground/60">No open positions</p>
+          <p className="text-xs text-muted-foreground/60">
+            {portfolioError || !portfolio ? 'Position data unavailable' : 'No open positions'}
+          </p>
         )}
       </div>
+      <p className="mb-4 text-[10px] leading-relaxed text-muted-foreground">
+        Worker-reported valuation; this response does not attest to price freshness or provider provenance.
+      </p>
 
       {recentOrders.length > 0 && (
         <div className="border-t border-border/50 pt-3">

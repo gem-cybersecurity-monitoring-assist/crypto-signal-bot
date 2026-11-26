@@ -69,22 +69,62 @@ function assertBrowserSafe(path: string, method: string): void {
   }
 }
 
-async function readError(response: Response): Promise<{ message: string; code?: string }> {
+function isSpaResponse(contentType: string, body: string): boolean {
+  return contentType.includes('text/html')
+    || /^\s*<!doctype\s+html\b/i.test(body)
+    || /^\s*<(?:html|head|body)\b/i.test(body);
+}
+
+async function readError(response: Response, path: string): Promise<{ message: string; code?: string }> {
   const fallback = `Backend request failed (${response.status})`;
   const contentType = response.headers.get('content-type') ?? '';
 
   try {
-    if (contentType.includes('application/json')) {
-      const payload = (await response.json()) as Record<string, unknown>;
+    const body = await response.text();
+    if (isSpaResponse(contentType, body)) {
+      return {
+        message: `The API request to ${path} returned an HTML page instead of an API response; the frontend SPA fallback may be handling this URL.`,
+        code: 'SPA_FALLBACK_RESPONSE',
+      };
+    }
+
+    if (contentType.includes('json') || body.trim().startsWith('{')) {
+      const payload = JSON.parse(body) as Record<string, unknown>;
+      if (payload.error === 'Not found' && typeof payload.path === 'string') {
+        return {
+          message: `The Worker API route was not found: ${payload.path}`,
+          code: 'API_ROUTE_NOT_FOUND',
+        };
+      }
       const message = payload.detail ?? payload.message ?? payload.error;
       return {
         message: typeof message === 'string' ? message : fallback,
-        code: typeof payload.code === 'string' ? payload.code : undefined,
+        code: typeof payload.code === 'string'
+          ? payload.code
+          : response.status === 401
+            ? 'AUTHENTICATION_REQUIRED'
+            : response.status === 403
+              ? 'ACCESS_FORBIDDEN'
+              : undefined,
       };
     }
-    return { message: (await response.text()) || fallback };
+    return {
+      message: body || fallback,
+      code: response.status === 401
+        ? 'AUTHENTICATION_REQUIRED'
+        : response.status === 403
+          ? 'ACCESS_FORBIDDEN'
+          : undefined,
+    };
   } catch {
-    return { message: fallback };
+    return {
+      message: fallback,
+      code: response.status === 401
+        ? 'AUTHENTICATION_REQUIRED'
+        : response.status === 403
+          ? 'ACCESS_FORBIDDEN'
+          : undefined,
+    };
   }
 }
 
@@ -92,10 +132,22 @@ async function getCurrentAccessToken(): Promise<string | null> {
   if (!SUPABASE_CONFIGURED) return null;
   try {
     const client = await getSupabaseClient();
-    const { data } = await client.auth.getSession();
+    const { data, error } = await client.auth.getSession();
+    if (error) {
+      throw new FrontendBackendError(
+        'Unable to verify the current sign-in session. Sign in again before retrying.',
+        undefined,
+        'AUTH_SESSION_UNAVAILABLE',
+      );
+    }
     return data.session?.access_token ?? null;
-  } catch {
-    return null;
+  } catch (error) {
+    if (error instanceof FrontendBackendError) throw error;
+    throw new FrontendBackendError(
+      'Unable to verify the current sign-in session. Sign in again before retrying.',
+      undefined,
+      'AUTH_SESSION_UNAVAILABLE',
+    );
   }
 }
 
@@ -132,7 +184,7 @@ async function backendFetch(path: string, init: BackendRequestInit = {}): Promis
     });
 
     if (!response.ok) {
-      const { message, code } = await readError(response);
+      const { message, code } = await readError(response, path);
       throw new FrontendBackendError(message, response.status, code);
     }
 
@@ -155,7 +207,24 @@ export async function fetchBackendJson<T>(
   init: BackendRequestInit = {},
 ): Promise<T> {
   const response = await backendFetch(path, init);
-  return (await response.json()) as T;
+  const contentType = response.headers.get('content-type') ?? '';
+  const body = await response.text();
+  if (isSpaResponse(contentType, body)) {
+    throw new FrontendBackendError(
+      `The API request to ${path} returned an HTML page instead of JSON; the frontend SPA fallback may be handling this URL.`,
+      response.status,
+      'SPA_FALLBACK_RESPONSE',
+    );
+  }
+  try {
+    return JSON.parse(body) as T;
+  } catch {
+    throw new FrontendBackendError(
+      `The API response for ${path} was not valid JSON.`,
+      response.status,
+      'INVALID_API_JSON',
+    );
+  }
 }
 
 export async function fetchBackendText(

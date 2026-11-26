@@ -617,10 +617,14 @@ async def console_portfolio_reset(body: PortfolioResetRequest) -> dict:
         raise HTTPException(status_code=400, detail="Set confirm=true to reset the portfolio")
 
     from decimal import Decimal
-    from backend.services.portfolio.service import reset_portfolio
+    from backend.services.portfolio.service import (reset_portfolio, require_ephemeral_reset, PortfolioRecoveryError)
     from backend.services.guardian_bot.service import deactivate_kill_switch, reset_counters
 
-    # 1. Reset portfolio
+    # 1. Reset portfolio only when no durable ledger or recovery latch exists.
+    try:
+        require_ephemeral_reset()
+    except PortfolioRecoveryError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     reset_portfolio(Decimal(str(body.starting_cash)))
 
     # 2. Deactivate kill switch & reset guardian counters

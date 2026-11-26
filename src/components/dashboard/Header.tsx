@@ -12,6 +12,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { NavLink } from '@/components/NavLink';
 import { useAuth, isSupabaseConfigured as SUPABASE_CONFIGURED } from '@/context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -432,6 +433,29 @@ export function Header({
             )}
           </div>
         </div>
+
+        <nav
+          aria-label="Owner dashboard navigation"
+          className="mt-2 flex gap-1 overflow-x-auto pb-1"
+        >
+          {[
+            { to: '/dashboard', label: 'Dashboard', end: true },
+            { to: '/portfolio', label: 'Portfolio' },
+            { to: '/health', label: 'Health' },
+            { to: '/audit', label: 'Audit' },
+            { to: '/settings', label: 'Settings' },
+          ].map(({ to, label, end }) => (
+            <NavLink
+              key={to}
+              to={to}
+              end={end}
+              className="shrink-0 rounded-md border border-border/70 px-3 py-2 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+              activeClassName="border-primary/60 bg-primary/10 text-primary"
+            >
+              {label}
+            </NavLink>
+          ))}
+        </nav>
 
         <div className="mt-2 flex items-center gap-2 overflow-x-auto pb-0.5 xl:hidden">
           <span className="status-chip status-chip-warning shrink-0">

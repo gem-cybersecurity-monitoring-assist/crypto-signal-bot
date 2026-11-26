@@ -507,3 +507,35 @@ historic fee and snapshot accounting may need reconciliation. No
 production Durable Object/queue migration, authenticated exchange
 certification, permitted external snapshot access or independent review
 has been completed.
+
+## 2026-11-26 coordinated Claude/Copilot convergence
+Base e554136af82e230be9997c4673900f3e9cd90d00. Original agent worktrees
+preserved. Combined in integration/agent-convergence-20261126 on the existing
+Azure VM. Claude's existing Python paper portfolio adds exact fill evidence,
+unique fill key, atomic transaction of order/trade/position/account state,
+FIFO replay, recovery checks, and additive schema upgrade. Copilot's frontend
+changes distinguish API/authentication errors, unavailable valuation and
+public shared paper data; responsive navigation and API contracts tested.
+Coordinator independently reproduced 65 focused backend and 23 frontend
+tests; added database-unavailable startup, durable-reset refusal and unknown
+commit outcome regressions. Unknown commit response leaves a recovery latch
+and does not overwrite committed order evidence; the existing reset routes
+return 409 when durable state exists instead of silently clearing RAM and
+Guardian. No durable ledger deletion or Guardian reset authorized.
+Final exact local candidate: 786 backend tests passed (2 existing warnings),
+108 frontend tests passed, architecture typecheck, production build,
+frontend performance budget, Ruff and repository audit passed.
+Existing Vercel production deployment dpl_Atra1MJ7hWMg8siDFft99Chb4gTh
+READY at main SHA 72c295e25295bcbf5dd4daa73878b0eb7891bd8e.
+Public attestation ok=true, canonical Worker health HTTP 200, paper/testnet,
+no mainnet, live trading, withdrawals, provider mutation or real funds.
+No new agent session or paid upgrade initiated by coordinator. Copilot
+reported 9.24 AI credits in its original session; exact remaining quotas
+and account overage settings unverified.
+Limitations: Python transaction changes are legacy compatibility only, not
+authoritative hot Durable Object migration. Legacy historical rows without
+exact evidence remain blocked, not fabricated. Durable ledger reset
+requires reviewed generation/reconciliation design. Worker shared paper
+summary/orders are not authenticated owner-isolated reads. Protected review,
+CI on published candidate, provider certification, unified Guardian,
+production deployment and owner-session acceptance remain required.

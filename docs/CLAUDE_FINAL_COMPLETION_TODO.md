@@ -345,3 +345,17 @@ Worker: https://crypto-signal-bot-api.analyzer-d94.workers.dev
 - [ ] Complete legacy durable accounting/restore reconciliation and
   shared authoritative Guardian/risk/event integration. No authority
   migration or production enablement until remaining acceptance gates.
+
+## Coordinated agent convergence — 2026-11-26
+- [x] Combine Claude atomic legacy paper persistence and Copilot frontend
+  contract changes; retain original agent worktrees.
+- [x] Guard recovery, ambiguous commits and unsafe RAM-only resets; add
+  regression cases. Verify 786 backend and 108 frontend tests, build,
+  typecheck, lint and architecture audit.
+- [x] Verify existing Vercel production SHA matches main and public
+  paper Worker attestation is healthy; no new deployment needed yet.
+- [ ] Publish exact tested candidate to existing draft PR #295, require
+  green CI and independent review; never bypass protected merge.
+- [ ] Reconcile historical legacy evidence, durable reset lifecycle,
+  authoritative portfolio/Guardian and authenticated owner read scope.
+- [ ] Complete permitted exchange certification and guarded release.

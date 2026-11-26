@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import (
 
 from backend.config.loader import get_database_config
 from backend.db.models import Base
+from backend.db.paper_ledger_schema import upgrade_paper_ledger_schema
 
 log = logging.getLogger(__name__)
 
@@ -81,6 +82,7 @@ async def init_db() -> None:
         # Publish the session factory only after successful initialization.
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+            await conn.run_sync(upgrade_paper_ledger_schema)
     except BaseException:
         await engine.dispose()
         raise

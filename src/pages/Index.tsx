@@ -25,7 +25,7 @@ import { useAuditTrail } from '@/hooks/useAuditTrail';
 import { useBackendMetrics } from '@/hooks/useBackendMetrics';
 import { useGuardianStatus } from '@/hooks/useGuardianStatus';
 import { usePersistedSettings } from '@/hooks/usePersistedSettings';
-import { usePortfolio } from '@/hooks/usePortfolio';
+import { describePortfolioLoadError, usePortfolio } from '@/hooks/usePortfolio';
 import { useSignalEngine } from '@/hooks/useSignalEngine';
 import { useConsole } from '@/hooks/useConsole';
 import { useMonitoring } from '@/hooks/useMonitoring';
@@ -52,7 +52,7 @@ function DiagnosticsWarning({
   backendUrl: string;
 }) {
   const failedEndpoints: string[] = [];
-  if (endpointErrors.balanceError) failedEndpoints.push('balance');
+  if (endpointErrors.balanceError) failedEndpoints.push('portfolio valuation');
   if (endpointErrors.configError) failedEndpoints.push('config');
   if (endpointErrors.exchangeStatusError) failedEndpoints.push('exchange status');
 
@@ -70,7 +70,7 @@ function DiagnosticsWarning({
         <div className="mt-2 space-y-1 text-xs font-mono text-muted-foreground">
           <p>Backend URL: {backendUrl}</p>
           {endpointErrors.balanceError && (
-            <p>Balance error: {endpointErrors.balanceError}</p>
+            <p>Portfolio valuation error: {endpointErrors.balanceError}</p>
           )}
           {endpointErrors.configError && (
             <p>Config error: {endpointErrors.configError}</p>
@@ -150,7 +150,7 @@ const Index = () => {
     preferBackendPrices
   );
   const { guardian, isLoading: guardianLoading, refetch: refetchGuardian } = useGuardianStatus();
-  const { portfolio, isLoading: portfolioLoading, refetch: refetchPortfolio } = usePortfolio();
+  const { portfolio, isLoading: portfolioLoading, error: portfolioError, refetch: refetchPortfolio } = usePortfolio();
   const { summary: earningsSummary, trades: earningsTrades, isLoading: earningsLoading, refetch: refetchEarnings } = useEarnings();
   const { audit, isLoading: auditLoading, refetch: refetchAudit } = useAuditTrail();
   const {
@@ -430,6 +430,7 @@ const Index = () => {
             <div className="lg:col-span-8">
               <PortfolioPanel
                 portfolio={portfolio}
+                portfolioError={portfolioError}
                 isLoading={portfolioLoading}
                 selectedSymbol={selectedCoin?.symbol ?? 'BTC'}
                 selectedPrice={selectedCoin?.price ?? 0}
