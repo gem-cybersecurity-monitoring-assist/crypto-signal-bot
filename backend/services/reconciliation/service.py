@@ -34,6 +34,7 @@ log = logging.getLogger(__name__)
 _loop_task: Optional[asyncio.Task] = None
 _loop_running: bool = False
 _last_report: Optional[dict] = None
+_last_successful_report: Optional[dict] = None
 
 RECONCILE_INTERVAL_SECONDS = 300   # every 5 minutes
 
@@ -74,7 +75,7 @@ async def run_reconciliation() -> ReconciliationResult:
     now = int(time.time())
     cfg = get_exchange_config()
 
-    global _last_report
+    global _last_report, _last_successful_report
 
     # Collect current state
     try:
@@ -112,15 +113,15 @@ async def run_reconciliation() -> ReconciliationResult:
 
     # Compare with last known report (simple drift check)
     if (
-        _last_report
-        and _last_report.get("mode") == cfg.mode
-        and _last_report.get("observation_status") == "observed"
-        and 0 <= now - _last_report["created_at"] <= RECONCILE_INTERVAL_SECONDS * 2
+        _last_successful_report
+        and _last_successful_report.get("mode") == cfg.mode
+        and _last_successful_report.get("observation_status") == "observed"
+        and 0 <= now - _last_successful_report["created_at"] <= RECONCILE_INTERVAL_SECONDS * 2
     ):
-        last_balance = _last_report.get("usdt_balance", balance)
+        last_balance = _last_successful_report.get("usdt_balance", balance)
         drift = abs(balance - last_balance)
         # Flag if balance changed with no trades since last reconciliation
-        last_trades = _last_report.get("trade_count", trades)
+        last_trades = _last_successful_report.get("trade_count", trades)
         if drift > 0.01 and trades == last_trades:
             discrepancy_detected = True
             discrepancy_detail = (
@@ -150,6 +151,7 @@ async def run_reconciliation() -> ReconciliationResult:
         "persistence_status": "pending",
     }
     _last_report = report
+    _last_successful_report = dict(report)
     try:
         await _persist_report(result)
         report["persistence_status"] = "committed"

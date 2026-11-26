@@ -99,14 +99,10 @@ def get_surge_status() -> dict:
 async def _get_current_price(symbol: str) -> Optional[float]:
     """Fetch latest price from market data service."""
     try:
-        from backend.services.market_data.service import get_price, MarketDataStale
-        try:
-            snap = await get_price(symbol)
-            return float(snap.price)
-        except MarketDataStale as e:
-            if e.stale_ticker and e.stale_ticker.price > 0:
-                return float(e.stale_ticker.price)
-        return None
+        from backend.services.market_data.service import get_price
+        from backend.services.portfolio.service import validated_mark
+        snap = await get_price(symbol)
+        return float(validated_mark(snap, symbol))
     except Exception as exc:
         log.debug("[surge_scanner] price fetch failed %s: %s", symbol, exc)
         return None

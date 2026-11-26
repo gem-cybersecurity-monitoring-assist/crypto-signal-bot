@@ -81,14 +81,18 @@ async def _get_coingecko_ticker_deduped(symbol: str) -> "Ticker":
             return _cg_dedup_cache[symbol]
 
         # Refresh all symbols in one call
+        from backend.adapters.exchanges import coingecko as cg
         from backend.adapters.exchanges.coingecko import _fetch_all_cached, _GECKO_TO_SYMBOL
         from backend.adapters.exchanges.coingecko import _SYMBOL_MAP
         from decimal import Decimal as _D
         import time as _t
 
         data, err = await _fetch_all_cached()
+        if err or not data or not 0 <= _t.time() - cg._cache_ts < cg._CACHE_TTL:
+            raise AdapterUnavailableError("CoinGecko fresh observation unavailable")
         if data:
-            now = _t.time()
+            now = cg._cache_ts
+            _cg_dedup_cache = {}
             for gecko_id, values in data.items():
                 sym = _GECKO_TO_SYMBOL.get(gecko_id)
                 if not sym:
@@ -107,7 +111,7 @@ async def _get_coingecko_ticker_deduped(symbol: str) -> "Ticker":
                     volume24h=_D(str(round(float(values.get("usd_24h_vol", 0)), 2))),
                     timestamp=int(now),
                 )
-            _cg_dedup_ts = _t.time()
+            _cg_dedup_ts = now
 
         if symbol not in _cg_dedup_cache:
             raise Exception(f"CoinGecko: no data for {symbol}")
@@ -432,6 +436,10 @@ async def _process_ticker_payload(
     if ticker.symbol != symbol:
         raise MarketDataUnavailable("Ticker symbol mismatch")
     cache_key = f"price:snapshot:{symbol}"
+    if source_name == "coingecko":
+        if not 0 <= now - ticker.timestamp <= PRICE_STALE_THRESHOLD_SECONDS:
+            raise MarketDataUnavailable("CoinGecko observation expired")
+        now = ticker.timestamp
 
     snapshot = PriceSnapshot(
         symbol=symbol,

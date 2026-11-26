@@ -558,3 +558,22 @@ migration. Pending order submission and peak persistence still require
 additional durable lifecycle verification; no historical evidence has been
 rewritten. Production deployment remains unchanged and owner/provider
 acceptance gates remain mandatory.
+
+### CodeRabbit review remediation (26 November 2026)
+Review of dd60b36e returned CHANGES_REQUESTED. Preserved the subsequent
+durable pending-order admission and peak persistence checkpoint (remote
+a24c018d; local b95ed242; identical tree). The current follow-up addresses
+the unguarded portfolio reset endpoint, stale CoinGecko and surge
+observations, finite positive restored pending quantities and prices,
+last-successful reconciliation drift baseline, immutable migration
+revision schema and valuation aggregation. Existing valuation recovery
+recheck is preserved. Certification pre-check path correction remains
+local-only: transfer of that workflow file was blocked, so the existing
+remote workflow is intentionally unchanged.
+Local evidence: 43 focused tests and 799 backend tests passed; architecture
+audit reported zero import cycles and consistency errors. No provider
+requests or live deployment performed during this validation.
+Review is not complete: verify all remaining inline and outside-diff
+findings, including durable signal-intent deduplication, protective-close
+confirmation, risk-sizing semantics and historic migration acceptance.
+This does not clear independent approval or authorize a release.

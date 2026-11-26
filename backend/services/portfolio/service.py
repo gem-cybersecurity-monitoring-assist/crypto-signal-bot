@@ -499,6 +499,10 @@ async def _marked_portfolio() -> tuple[Decimal, Decimal, Decimal, list[dict]]:
     cash = _cash
     lots_by_symbol = {symbol: tuple(lots) for symbol, lots in _lots.items() if lots}
     trades = tuple(_trades)
+    realized_by_symbol = defaultdict(Decimal)
+    for trade in trades:
+        if trade.realized_pnl is not None:
+            realized_by_symbol[trade.symbol] += trade.realized_pnl
     market_value = Decimal("0")
     unrealized_total = Decimal("0")
     positions = []
@@ -514,8 +518,7 @@ async def _marked_portfolio() -> tuple[Decimal, Decimal, Decimal, list[dict]]:
         unrealized = notional - total_cost
         market_value += notional
         unrealized_total += unrealized
-        realized = sum((t.realized_pnl for t in trades
-                        if t.symbol == symbol and t.realized_pnl is not None), Decimal("0"))
+        realized = realized_by_symbol[symbol]
         positions.append({
             "symbol": symbol, "qty": float(total_qty),
             "avg_entry_price": float(_usd(avg_entry)), "mark_price": float(mark),
@@ -1294,9 +1297,16 @@ async def restore_portfolio_state(account_id: str = _DEFAULT_ACCOUNT_ID) -> None
     for o in orders:
         if o.status not in ("PENDING", "FILLED", "CANCELLED"):
             raise PortfolioRecoveryError(f"order {o.id} has an unresolved durable status")
-        if o.status == "PENDING" and (o.order_type != "LIMIT" or o.side not in ("BUY", "SELL")
-                or o.mode != "paper" or not o.price or o.qty <= 0):
-            raise PortfolioRecoveryError(f"pending order {o.id} is malformed")
+        if o.status == "PENDING":
+            try:
+                qty = _qty(o.qty)
+                price = _qty(o.price)
+                valid = (qty.is_finite() and qty > 0 and price.is_finite() and price > 0)
+            except (ArithmeticError, TypeError, ValueError):
+                valid = False
+            if (o.order_type != "LIMIT" or o.side not in ("BUY", "SELL")
+                    or o.mode != "paper" or not valid):
+                raise PortfolioRecoveryError(f"pending order {o.id} is malformed")
         restored_orders[o.id] = OrderState(
             id=o.id, account_id=o.account_id, symbol=o.symbol, side=o.side,
             order_type=o.order_type, qty=_qty(o.qty), price=_qty(o.price) if o.price is not None else None, status=o.status,

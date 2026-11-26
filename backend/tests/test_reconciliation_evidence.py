@@ -14,6 +14,7 @@ from backend.services.reconciliation import service as recon
 @pytest.fixture
 def isolated(monkeypatch, tmp_path):
     monkeypatch.setattr(recon, "_last_report", None)
+    monkeypatch.setattr(recon, "_last_successful_report", None)
     monkeypatch.setattr(recon, "get_exchange_config", lambda: SimpleNamespace(mode="paper"))
     monkeypatch.setattr(db, "_engine", None)
     monkeypatch.setattr(db, "_session_factory", None)
@@ -90,3 +91,16 @@ def test_api_never_claims_ledger_reconciled(monkeypatch, state, age, drift, expe
     assert data["status"] == expected
     assert data["ledger_reconciled"] is False
     assert data["worker_reconciled"] is False
+
+
+@pytest.mark.asyncio
+async def test_failure_does_not_discard_recent_successful_drift_baseline(isolated, monkeypatch):
+    monkeypatch.setattr(recon, "_persist_report", AsyncMock())
+    await recon.run_reconciliation()
+    pnl.get_pnl_summary.side_effect = RuntimeError("unavailable")
+    await recon.run_reconciliation()
+    assert (await recon.get_latest_report())["observation_status"] == "unavailable"
+    pnl.get_pnl_summary.side_effect = None
+    monkeypatch.setattr(pnl, "get_usdt_balance", lambda: 900.0)
+    result = await recon.run_reconciliation()
+    assert result.discrepancy_detected and "Balance drift" in result.discrepancy_detail

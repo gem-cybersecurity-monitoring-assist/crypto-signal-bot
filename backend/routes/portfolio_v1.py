@@ -320,7 +320,9 @@ async def reset_portfolio_route(body: PortfolioResetRequest) -> PortfolioResetOu
         get_guardian_status,
         reset_counters,
     )
-    from backend.services.portfolio.service import reset_portfolio as reset_portfolio_service
+    from backend.services.portfolio.service import (
+        PortfolioRecoveryError, require_ephemeral_reset, reset_portfolio as reset_portfolio_service,
+    )
     from backend.services.signal_executor.service import _last_acted
 
     cfg = get_runtime_config()
@@ -338,6 +340,10 @@ async def reset_portfolio_route(body: PortfolioResetRequest) -> PortfolioResetOu
     starting_balance = float(body.starting_cash)
     reason = body.reason or "Manual portfolio reset via API"
 
+    try:
+        require_ephemeral_reset()
+    except PortfolioRecoveryError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     reset_portfolio_service(starting_cash=Decimal(str(starting_balance)))
 
     context.guardian_starting_nav = starting_balance

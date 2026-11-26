@@ -366,3 +366,13 @@ Worker: https://crypto-signal-bot-api.analyzer-d94.workers.dev
 - [x] Verify 789 backend tests, 57 ledger/console tests, lint and diff checks.
 - [ ] Complete remaining durable pending submission/peak persistence and
   production authority migration; certify authenticated owner data scope.
+
+### Independent review remediation
+- [x] Preserve durable pending admission and high-water state checkpoint.
+- [x] Correct reset guard, stale observation handling, restored limit
+  validation, successful drift baseline and frozen migration; verify
+  799 backend and 43 focused tests.
+- [ ] Certification pre-check path correction remains local-only;
+  workflow publication was blocked, not deployed or bypassed.
+- [ ] Resolve remaining applicable CodeRabbit findings and obtain review
+  of exact head; do not approve or merge on the agent's own authority.

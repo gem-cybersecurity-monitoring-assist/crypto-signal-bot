@@ -209,3 +209,21 @@ class TestGetSurgeStatus:
         assert status["config"]["stop_loss_pct"] == scanner.STOP_LOSS_PCT
         assert status["config"]["surge_threshold_mid"] == scanner.SURGE_THRESHOLD_MID
         assert status["config"]["surge_threshold_high"] == scanner.SURGE_THRESHOLD_HIGH
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raised", [False, True])
+async def test_stale_trigger_cannot_enter_history_or_open_position(raised):
+    from types import SimpleNamespace
+    from backend.services.market_data.service import MarketDataStale
+    _reset_scanner()
+    symbol = "BTCUSDT"
+    _fill_history(symbol, 100)
+    original = list(scanner._price_history[symbol])
+    snap = SimpleNamespace(price=106, stale=True, symbol=symbol, source="cache:40s_old",
+                           market_data_mode="unavailable", fetched_at=int(time.time())-40)
+    mock = AsyncMock(side_effect=MarketDataStale("stale", snap)) if raised else AsyncMock(return_value=snap)
+    with patch("backend.services.market_data.service.get_price", mock), patch.object(scanner, "_open_surge_position", AsyncMock()) as opened:
+        assert await scanner._scan_symbol(symbol) is None
+        opened.assert_not_awaited()
+    assert list(scanner._price_history[symbol]) == original

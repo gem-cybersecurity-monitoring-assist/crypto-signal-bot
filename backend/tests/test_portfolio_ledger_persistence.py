@@ -201,13 +201,15 @@ async def test_durable_reset_routes_preserve_ledger_and_guardian(db, monkeypatch
     from unittest.mock import AsyncMock
     from backend.routes.console_v1 import console_portfolio_reset, PortfolioResetRequest as ConsoleReset
     from backend.routes.risk_v1 import paper_reset, PaperResetRequest as RiskReset
+    from backend.routes.portfolio_v1 import reset_portfolio_route, PortfolioResetRequest as PortfolioReset
     from backend.services.guardian_bot import service as guardian
     await svc.submit_order("BTCUSDT", "BUY", "MARKET", 1)
     before = _snapshot()
     deactivate = AsyncMock()
     monkeypatch.setattr(guardian, "deactivate_kill_switch", deactivate)
     for action, body in [(console_portfolio_reset, ConsoleReset(confirm=True, starting_cash=10000)),
-                         (paper_reset, RiskReset(starting_cash=10000))]:
+                         (paper_reset, RiskReset(starting_cash=10000)),
+                         (reset_portfolio_route, PortfolioReset(confirm=True, starting_cash=10000))]:
         with pytest.raises(HTTPException) as exc:
             await action(body)
         assert exc.value.status_code == 409
@@ -340,3 +342,16 @@ async def test_peak_write_failure_does_not_publish_unverified_high_water(db, mon
     with pytest.raises(svc.PortfolioValuationUnavailable):
         await svc.get_portfolio_summary()
     assert svc._peak_equity == before and svc._recovery_blocked
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field,value", [("price",-1), ("qty",0), ("price",0)])
+async def test_restore_rejects_invalid_pending_values(db, field, value):
+    order = await svc.submit_order("BTCUSDT", "BUY", "LIMIT", 1, price=50)
+    async with db_session.get_session() as session:
+        await session.execute(sa.update(PaperOrderRecord).where(PaperOrderRecord.id == order.id).values(**{field:value}))
+        await session.commit()
+    svc.reset_portfolio()
+    with pytest.raises(svc.PortfolioRecoveryError, match="malformed"):
+        await svc.restore_portfolio_state()
+    assert not svc.get_orders()
