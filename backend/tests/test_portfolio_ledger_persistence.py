@@ -275,3 +275,68 @@ async def test_filled_order_history_survives_restart(db):
     svc.reset_portfolio()
     await svc.restore_portfolio_state()
     assert svc.get_order(order.id)["status"] == "FILLED"
+
+
+@pytest.mark.asyncio
+async def test_pending_order_is_not_published_before_durable_admission(db, monkeypatch):
+    import asyncio
+    entered, release = asyncio.Event(), asyncio.Event()
+    original = svc._persist_order
+    async def delayed(order):
+        entered.set()
+        await release.wait()
+        await original(order)
+    monkeypatch.setattr(svc, "_persist_order", delayed)
+    task = asyncio.create_task(svc.submit_order("BTCUSDT", "BUY", "LIMIT", 1, price=50))
+    await entered.wait()
+    assert not svc.get_orders()
+    release.set()
+    order = await task
+    assert order.status == "PENDING"
+    assert (await _rows(PaperOrderRecord))[0].status == "PENDING"
+
+
+@pytest.mark.asyncio
+async def test_pending_order_write_failure_latches_recovery(db, monkeypatch):
+    from contextlib import asynccontextmanager
+    @asynccontextmanager
+    async def failed_session():
+        raise OSError("simulated unavailable database")
+        yield
+    monkeypatch.setattr(db_session, "get_session", failed_session)
+    with pytest.raises(svc.PortfolioRecoveryError):
+        await svc.submit_order("BTCUSDT", "BUY", "LIMIT", 1, price=50)
+    assert svc._recovery_blocked
+    assert not svc.get_orders()
+    with pytest.raises(svc.PortfolioValuationUnavailable):
+        await svc.get_portfolio_summary()
+
+
+@pytest.mark.asyncio
+async def test_marked_peak_survives_restart_without_another_fill(db):
+    await svc.submit_order("BTCUSDT", "BUY", "MARKET", 1)
+    PRICE["v"] = "150"
+    summary = await svc.get_portfolio_summary()
+    peak = Decimal(str(summary["max_equity"]))
+    assert peak > svc.STARTING_CASH
+    svc.reset_portfolio()
+    await svc.restore_portfolio_state()
+    assert svc._peak_equity == peak
+    PRICE["v"] = "120"
+    assert (await svc.get_portfolio_summary())["drawdown_pct"] > 0
+
+
+@pytest.mark.asyncio
+async def test_peak_write_failure_does_not_publish_unverified_high_water(db, monkeypatch):
+    from contextlib import asynccontextmanager
+    await svc.submit_order("BTCUSDT", "BUY", "MARKET", 1)
+    before = svc._peak_equity
+    PRICE["v"] = "150"
+    @asynccontextmanager
+    async def failed_session():
+        raise OSError("simulated unavailable database")
+        yield
+    monkeypatch.setattr(db_session, "get_session", failed_session)
+    with pytest.raises(svc.PortfolioValuationUnavailable):
+        await svc.get_portfolio_summary()
+    assert svc._peak_equity == before and svc._recovery_blocked

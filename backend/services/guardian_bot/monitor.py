@@ -35,7 +35,6 @@ async def _monitor_loop() -> None:
             # Use marked equity (cash + market value), not just cash.
             # This prevents false drawdown triggers when capital is deployed into positions.
             equity = await port_svc._compute_equity()
-            port_svc._peak_equity = max(port_svc._peak_equity, equity)
             peak   = port_svc._peak_equity
             dd     = float((peak - equity) / peak * 100) if float(peak) > 0 else 0.0
 

@@ -118,6 +118,7 @@ _portfolio_stop: Optional[asyncio.Event] = None
 _portfolio_starting = False
 _SHUTDOWN_TIMEOUT = 15.0
 _fill_lock = asyncio.Lock()
+_peak_lock = asyncio.Lock()
 _state_revision = 0
 _recovery_blocked: Optional[str] = None   # set when durable state is ambiguous
 
@@ -323,26 +324,28 @@ async def submit_order(
         price=_qty(price) if price else None,
         status="PENDING",
     )
-    _orders[order.id] = order
+    # Do not publish a pending limit until risk admission and durable order
+    # recording finish; cancellation and the limit loop share this lock.
+    async with _fill_lock:
+        if (
+            _recovery_blocked is not None
+            or order.account_id != _DEFAULT_ACCOUNT_ID
+            or order.side not in ("BUY", "SELL")
+            or order.order_type not in ("MARKET", "LIMIT")
+            or not order.qty.is_finite() or order.qty <= 0
+            or (order.order_type == "LIMIT" and
+                (order.price is None or not order.price.is_finite() or order.price <= 0))
+        ):
+            order.status = "CANCELLED"
+        elif order.order_type == "MARKET":
+            await _fill_order_locked(order)
+        elif not await _apply_risk_gate(order, order.price):
+            order.status = "CANCELLED"
+            order.updated_at = int(time.time())
 
-    if (
-        _recovery_blocked is not None
-        or order.account_id != _DEFAULT_ACCOUNT_ID
-        or order.side not in ("BUY", "SELL")
-        or order.order_type not in ("MARKET", "LIMIT")
-        or not order.qty.is_finite() or order.qty <= 0
-        or (order.order_type == "LIMIT" and
-            (order.price is None or not order.price.is_finite() or order.price <= 0))
-    ):
-        order.status = "CANCELLED"
-    elif order.order_type == "MARKET":
-        await _fill_order(order)
-    elif not await _apply_risk_gate(order, order.price):
-        order.status = "CANCELLED"
-        order.updated_at = int(time.time())
-
-    if _recovery_blocked is None and order.status != "FILLED":
-        await _persist_order(order)
+        if _recovery_blocked is None and order.status != "FILLED":
+            await _persist_order(order)
+        _orders[order.id] = order
     return order
 
 
@@ -477,10 +480,8 @@ async def _fill_order_locked(order: OrderState) -> None:
     _state_revision += 1
     _trades.append(trade)
     try:
-        equity = await _compute_equity()
-        if equity > _peak_equity:
-            _peak_equity = equity
-            await _persist_peak(order.account_id, _peak_equity)
+        await _compute_equity()
+        # _compute_equity records a new peak durably before returning.
     except PortfolioValuationUnavailable:
         log.warning("[portfolio] marked equity unavailable after paper fill")
     log.info("[portfolio] paper fill %s %s", order.side, order.symbol)
@@ -520,13 +521,15 @@ async def _marked_portfolio() -> tuple[Decimal, Decimal, Decimal, list[dict]]:
             "avg_entry_price": float(_usd(avg_entry)), "mark_price": float(mark),
             "unrealized_pnl": float(_usd(unrealized)), "realized_pnl": float(_usd(realized)),
         })
-    if revision != _state_revision:
-        raise PortfolioValuationUnavailable("Portfolio changed during valuation")
+    if revision != _state_revision or _recovery_blocked is not None:
+        raise PortfolioValuationUnavailable("Portfolio changed or requires recovery")
     return cash, _usd(cash + market_value), _usd(unrealized_total), positions
 
 
 async def _compute_equity() -> Decimal:
+    revision = _state_revision
     _, equity, _, _ = await _marked_portfolio()
+    await _record_peak(equity, revision)
     return equity
 
 
@@ -538,8 +541,9 @@ async def get_portfolio_summary(account_id: str = _DEFAULT_ACCOUNT_ID) -> dict:
     if _recovery_blocked is not None:
         raise PortfolioValuationUnavailable("Portfolio recovery blocked")
     now = int(time.time())
+    revision = _state_revision
     cash, equity, unrealized, positions = await _marked_portfolio()
-    _peak_equity = max(_peak_equity, equity)
+    await _record_peak(equity, revision)
     drawdown = float((_peak_equity - equity) / _peak_equity * 100) if _peak_equity > 0 else 0.0
 
     total_realized   = sum(
@@ -624,8 +628,9 @@ async def _snapshot_loop() -> None:
     global _peak_equity
     while await _next_tick(_SNAPSHOT_INTERVAL):
         try:
+            revision = _state_revision
             cash, equity, unrealized, _ = await _marked_portfolio()
-            _peak_equity = max(_peak_equity, equity)
+            await _record_peak(equity, revision)
             drawdown = float((_peak_equity - equity) / _peak_equity * 100) if _peak_equity > 0 else 0.0
             snap = EquitySnapshot(
                 account_id=_DEFAULT_ACCOUNT_ID,
@@ -656,14 +661,12 @@ async def _limit_fill_loop() -> None:
                 snap = await get_price(order.symbol)
                 mark = validated_mark(snap, order.symbol)
                 limit = order.price
-                if order.side == "BUY"  and mark <= limit:
-                    await _fill_order(order)
-                    if _recovery_blocked is None and order.status != "FILLED":
-                        await _persist_order(order)
-                elif order.side == "SELL" and mark >= limit:
-                    await _fill_order(order)
-                    if _recovery_blocked is None and order.status != "FILLED":
-                        await _persist_order(order)
+                if ((order.side == "BUY" and mark <= limit)
+                        or (order.side == "SELL" and mark >= limit)):
+                    async with _fill_lock:
+                        await _fill_order_locked(order)
+                        if _recovery_blocked is None and order.status == "CANCELLED":
+                            await _persist_order(order)
             except Exception as exc:
                 log.debug("limit fill check error %s: %s", order.id[:8], exc)
 
@@ -673,27 +676,40 @@ async def _limit_fill_loop() -> None:
 # ─────────────────────────────────────────────────────────────────
 
 async def _persist_order(order: OrderState) -> None:
+    """Persist admission/rejection before acknowledging a non-filled order."""
+    global _recovery_blocked
+    if not _db_ready():
+        if not (_portfolio_tasks or _portfolio_starting):
+            return  # isolated in-memory test compatibility
+        _recovery_blocked = "Durable portfolio database unavailable"
+        raise PortfolioRecoveryError(_recovery_blocked)
     try:
         from backend.db.session import get_session
         from backend.db.models import PaperOrderRecord
         async with get_session() as session:
-            from sqlalchemy import select
-            existing = await session.get(PaperOrderRecord, order.id)
-            if existing:
-                existing.status = order.status
-                existing.updated_at = order.updated_at
-            else:
-                session.add(PaperOrderRecord(
-                    id=order.id, account_id=order.account_id,
-                    symbol=order.symbol, side=order.side,
-                    order_type=order.order_type, qty=float(order.qty),
-                    price=float(order.price) if order.price else None,
-                    status=order.status, mode=order.mode,
-                    created_at=order.created_at, updated_at=order.updated_at,
-                ))
-            await session.commit()
+            async with session.begin():
+                existing = await session.get(PaperOrderRecord, order.id)
+                if existing:
+                    if (existing.account_id != order.account_id or
+                            existing.status not in ("PENDING", order.status)):
+                        raise PortfolioRecoveryError("Durable order identity/status conflict")
+                    existing.status = order.status
+                    existing.updated_at = order.updated_at
+                else:
+                    session.add(PaperOrderRecord(
+                        id=order.id, account_id=order.account_id,
+                        symbol=order.symbol, side=order.side,
+                        order_type=order.order_type, qty=float(order.qty),
+                        price=float(order.price) if order.price else None,
+                        status=order.status, mode=order.mode,
+                        created_at=order.created_at, updated_at=order.updated_at,
+                    ))
+    except asyncio.CancelledError:
+        _recovery_blocked = "Order persistence outcome requires reconciliation"
+        raise
     except Exception as exc:
-        log.debug("order persist error (non-fatal): %s", exc)
+        _recovery_blocked = "Order persistence outcome requires reconciliation"
+        raise PortfolioRecoveryError(_recovery_blocked) from exc
 
 
 def _db_ready() -> bool:
@@ -736,6 +752,9 @@ async def _commit_fill(
         async with session.begin():
             rec = await session.get(PaperOrderRecord, order.id)
             if rec:
+                if (rec.status != "PENDING" or rec.account_id != account_id
+                        or rec.symbol != order.symbol or rec.side != order.side):
+                    raise PortfolioRecoveryError("Durable fill identity/status conflict")
                 rec.status = "FILLED"
                 rec.qty = float(order.qty)
                 rec.updated_at = order.updated_at
@@ -783,20 +802,42 @@ async def _commit_fill(
                 ))
 
 
-async def _persist_peak(account_id: str, peak: Decimal) -> None:
-    """Monotonic peak update; snapshots also carry max_equity as evidence."""
-    if not _db_ready():
-        return
-    try:
+async def _record_peak(equity: Decimal, revision: int) -> None:
+    """Publish a high-water mark only after durable evidence, never decrease it."""
+    global _peak_equity, _recovery_blocked
+    async with _peak_lock:
+        if _recovery_blocked is not None or revision != _state_revision:
+            raise PortfolioValuationUnavailable("Portfolio changed or requires recovery")
+        if equity <= _peak_equity:
+            return
+        if not _db_ready():
+            if _portfolio_tasks or _portfolio_starting:
+                _recovery_blocked = "Durable peak persistence unavailable"
+                raise PortfolioValuationUnavailable(_recovery_blocked)
+            _peak_equity = equity  # isolated in-process compatibility
+            return
         from backend.db.session import get_session
         from backend.db.models import PaperAccountStateRecord
-        async with get_session() as session:
-            async with session.begin():
-                state = await session.get(PaperAccountStateRecord, account_id)
-                if state and peak > Decimal(state.peak_equity_text):
+        try:
+            async with get_session() as session:
+                async with session.begin():
+                    state = await session.get(PaperAccountStateRecord, _DEFAULT_ACCOUNT_ID)
+                    if state is None:
+                        raise PortfolioRecoveryError("Missing durable account state")
+                    stored = Decimal(state.peak_equity_text)
+                    if not stored.is_finite() or stored <= 0:
+                        raise PortfolioRecoveryError("Invalid durable peak")
+                    peak = max(stored, _peak_equity, equity)
                     state.peak_equity_text = str(peak)
-    except Exception as exc:
-        log.warning("[portfolio] peak persist failed: %s", type(exc).__name__)
+        except asyncio.CancelledError:
+            _recovery_blocked = "Durable peak outcome requires reconciliation"
+            raise
+        except Exception as exc:
+            _recovery_blocked = "Durable peak outcome requires reconciliation"
+            raise PortfolioValuationUnavailable(_recovery_blocked) from exc
+        _peak_equity = max(_peak_equity, peak)
+        if revision != _state_revision or _recovery_blocked is not None:
+            raise PortfolioValuationUnavailable("Portfolio changed or requires recovery")
 
 
 async def _persist_snapshot(snap: EquitySnapshot) -> None:

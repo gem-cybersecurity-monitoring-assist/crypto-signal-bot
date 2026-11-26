@@ -110,13 +110,17 @@ class PortfolioOut(BaseModel):
 async def create_order(body: OrderRequest) -> OrderOut:
     if body.order_type == "LIMIT" and body.price is None:
         raise HTTPException(status_code=422, detail="price required for LIMIT orders")
-    order = await submit_order(
-        symbol=body.symbol,
-        side=body.side,
-        order_type=body.order_type,
-        qty=body.qty,
-        price=body.price,
-    )
+    from backend.services.portfolio.service import PortfolioRecoveryError
+    try:
+        order = await submit_order(
+            symbol=body.symbol,
+            side=body.side,
+            order_type=body.order_type,
+            qty=body.qty,
+            price=body.price,
+        )
+    except PortfolioRecoveryError as exc:
+        raise HTTPException(status_code=503, detail="Order persistence requires reconciliation") from exc
     return OrderOut(
         **{
             "id": order.id,
