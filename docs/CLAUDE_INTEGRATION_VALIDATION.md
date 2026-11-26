@@ -309,3 +309,17 @@ does not authenticate provider snapshots, persist recovery evidence, or
 authorize any execution. The actual gateway, transport/session ownership,
 provider verification, shared authority, reviewed deployment and
 certification remain open.
+
+## Depth transport callback boundary
+Added a bounded provider-shaped JSON frame adapter for the local depth
+observation session. Validates symbol, sequence, timestamp and decimal
+level fields, rejects malformed/oversized frames and clock regressions,
+and isolates callbacks from prior connection generations. Disconnect
+marks the observation session unavailable. Snapshot responses remain
+bound to the caller's requested symbol and recovery attempt; provider
+authenticity is not established. No sockets are opened by this component.
+Azure: 110 Worker contract/fast-path tests passed, including 11 new
+transport cases; Worker build and paper-safety passed. Prior checkpoint
+03661d3a CI 45761902412 passed. Actual socket lifecycle ownership,
+authenticated provider retrieval, durable recovery evidence and shared
+authority remain outstanding.

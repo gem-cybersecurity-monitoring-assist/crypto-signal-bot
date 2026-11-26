@@ -102,6 +102,10 @@ export class DepthObservationSession {
     return true
   }
 
+  disconnect(nowMs: number): void {
+    this.fail('TRANSPORT_DISCONNECTED', nowMs)
+  }
+
   status(nowMs: number) {
     if (this.phase === 'recovering' && this.recovery.tick(nowMs) === 'unavailable') {
       this.fail('RECOVERY_TIMEOUT', nowMs)

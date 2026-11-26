@@ -264,3 +264,11 @@ Worker: https://crypto-signal-bot-api.analyzer-d94.workers.dev
 - [ ] Integrate the local session into a verified transport owner; authenticate
   provider snapshots, establish durable recovery evidence and verify end-to-end
   gateway behavior. No running production gateway is claimed.
+
+## Depth transport callback increment
+- [x] Implement and test bounded provider-shaped frame validation,
+  connection generation isolation, disconnect and clock handling.
+- [x] Verify 110 Worker contract/fast-path tests, build and paper-safety.
+- [ ] Connect the callback boundary to an approved socket/REST transport,
+  verify provider and snapshot provenance, and persist recovery evidence.
+  No external connection or trading authority is established by replay.
