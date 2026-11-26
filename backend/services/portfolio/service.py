@@ -1110,24 +1110,42 @@ async def close_all_positions() -> List[dict]:
     return results
 
 
-def cancel_pending_order(order_id: str) -> bool:
-    """
-    Cancel a PENDING limit order.  Returns True if cancelled, False if
-    the order was not found or was not in PENDING state.
-    """
-    order = _orders.get(order_id)
-    if not order or order.status != "PENDING":
-        return False
-    order.status = "CANCELLED"
-    order.updated_at = int(time.time())
-    import asyncio as _asyncio
-    try:
-        loop = _asyncio.get_event_loop()
-        if loop.is_running():
-            _schedule_persistence(_persist_order(order))
-    except Exception:
-        pass
-    return True
+async def cancel_pending_order(order_id: str) -> bool:
+    """Acknowledge cancellation only after durable commit; serialize with fills."""
+    global _recovery_blocked
+    async with _fill_lock:
+        order = _orders.get(order_id)
+        if _recovery_blocked is not None:
+            raise PortfolioRecoveryError("Portfolio recovery blocked")
+        if not order or order.status != "PENDING":
+            return False
+        now = int(time.time())
+        if _db_ready():
+            from backend.db.session import get_session
+            from backend.db.models import PaperOrderRecord
+            from sqlalchemy import update
+            try:
+                async with get_session() as session:
+                    async with session.begin():
+                        result = await session.execute(update(PaperOrderRecord).where(
+                            PaperOrderRecord.id == order.id,
+                            PaperOrderRecord.account_id == order.account_id,
+                            PaperOrderRecord.status == "PENDING",
+                        ).values(status="CANCELLED", updated_at=now))
+                        if result.rowcount != 1:
+                            raise PortfolioRecoveryError("Pending order evidence disagrees with durable state")
+            except asyncio.CancelledError:
+                _recovery_blocked = "Cancellation outcome requires reconciliation"
+                raise
+            except Exception as exc:
+                _recovery_blocked = "Cancellation outcome requires reconciliation"
+                raise PortfolioRecoveryError(_recovery_blocked) from exc
+        elif _portfolio_tasks or _portfolio_starting:
+            _recovery_blocked = "Durable portfolio database unavailable"
+            raise PortfolioRecoveryError(_recovery_blocked)
+        order.status = "CANCELLED"
+        order.updated_at = now
+        return True
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -1231,15 +1249,16 @@ async def restore_portfolio_state(account_id: str = _DEFAULT_ACCOUNT_ID) -> None
     filled_ids = {o.id for o in orders if o.status == "FILLED"}
     if filled_ids != {t.order_id for t in trades}:
         raise PortfolioRecoveryError("filled orders and trades disagree")
-    pending: Dict[str, OrderState] = {}
+    restored_orders: Dict[str, OrderState] = {}
     for o in orders:
-        if o.status != "PENDING":
-            continue
-        if o.order_type != "LIMIT" or o.side not in ("BUY", "SELL") or not o.price or o.qty <= 0:
+        if o.status not in ("PENDING", "FILLED", "CANCELLED"):
+            raise PortfolioRecoveryError(f"order {o.id} has an unresolved durable status")
+        if o.status == "PENDING" and (o.order_type != "LIMIT" or o.side not in ("BUY", "SELL")
+                or o.mode != "paper" or not o.price or o.qty <= 0):
             raise PortfolioRecoveryError(f"pending order {o.id} is malformed")
-        pending[o.id] = OrderState(
+        restored_orders[o.id] = OrderState(
             id=o.id, account_id=o.account_id, symbol=o.symbol, side=o.side,
-            order_type=o.order_type, qty=_qty(o.qty), price=_qty(o.price), status="PENDING",
+            order_type=o.order_type, qty=_qty(o.qty), price=_qty(o.price) if o.price is not None else None, status=o.status,
             mode=o.mode or "paper", created_at=o.created_at or 0, updated_at=o.updated_at or 0,
         )
 
@@ -1251,6 +1270,6 @@ async def restore_portfolio_state(account_id: str = _DEFAULT_ACCOUNT_ID) -> None
         _lots[sym] = l
     _trades[:] = trades
     _orders.clear()
-    _orders.update(pending)
-    log.info("[portfolio] restored %d trades, %d positions, %d pending orders",
-             len(trades), len(lots), len(pending))
+    _orders.update(restored_orders)
+    log.info("[portfolio] restored %d trades, %d positions, %d orders",
+             len(trades), len(lots), len(restored_orders))

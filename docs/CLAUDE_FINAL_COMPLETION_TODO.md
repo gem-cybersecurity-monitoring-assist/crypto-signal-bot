@@ -359,3 +359,10 @@ Worker: https://crypto-signal-bot-api.analyzer-d94.workers.dev
 - [ ] Reconcile historical legacy evidence, durable reset lifecycle,
   authoritative portfolio/Guardian and authenticated owner read scope.
 - [ ] Complete permitted exchange certification and guarded release.
+
+### Durable cancellation checkpoint
+- [x] Persist pending cancellation before acknowledgement; preserve terminal
+  order history after restart and fail closed on missing evidence.
+- [x] Verify 789 backend tests, 57 ledger/console tests, lint and diff checks.
+- [ ] Complete remaining durable pending submission/peak persistence and
+  production authority migration; certify authenticated owner data scope.

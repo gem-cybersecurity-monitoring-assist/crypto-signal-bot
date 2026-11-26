@@ -244,3 +244,34 @@ async def test_unknown_commit_outcome_cannot_be_overwritten(db, monkeypatch):
     await svc.restore_portfolio_state()
     assert len(svc._trades) == 1
     assert svc._cash == Decimal("9899.9")
+
+
+@pytest.mark.asyncio
+async def test_durable_cancellation_survives_restart(db):
+    order = await svc.submit_order("BTCUSDT", "BUY", "LIMIT", 1, price=50)
+    assert await svc.cancel_pending_order(order.id) is True
+    svc.reset_portfolio()
+    await svc.restore_portfolio_state()
+    assert svc.get_order(order.id)["status"] == "CANCELLED"
+    assert not await svc.cancel_pending_order(order.id)
+    assert not svc._trades
+
+
+@pytest.mark.asyncio
+async def test_cancellation_cannot_claim_success_without_pending_evidence(db):
+    order = await svc.submit_order("BTCUSDT", "BUY", "LIMIT", 1, price=50)
+    async with db_session.get_session() as s:
+        await s.execute(sa.delete(PaperOrderRecord).where(PaperOrderRecord.id == order.id))
+        await s.commit()
+    with pytest.raises(svc.PortfolioRecoveryError):
+        await svc.cancel_pending_order(order.id)
+    assert svc._recovery_blocked and order.status == "PENDING"
+    assert not svc._trades
+
+
+@pytest.mark.asyncio
+async def test_filled_order_history_survives_restart(db):
+    order = await svc.submit_order("BTCUSDT", "BUY", "MARKET", 1)
+    svc.reset_portfolio()
+    await svc.restore_portfolio_state()
+    assert svc.get_order(order.id)["status"] == "FILLED"

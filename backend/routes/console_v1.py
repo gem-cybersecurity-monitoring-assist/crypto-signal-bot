@@ -519,7 +519,11 @@ class CancelOrderRequest(BaseModel):
              summary="Cancel a pending limit order",
              dependencies=[Depends(_require_operator)])
 async def console_cancel_order(body: CancelOrderRequest) -> dict:
-    cancelled = cancel_pending_order(body.order_id)
+    from backend.services.portfolio.service import PortfolioRecoveryError
+    try:
+        cancelled = await cancel_pending_order(body.order_id)
+    except PortfolioRecoveryError as exc:
+        raise HTTPException(status_code=503, detail="Cancellation requires durable reconciliation") from exc
     if not cancelled:
         raise HTTPException(
             status_code=404,

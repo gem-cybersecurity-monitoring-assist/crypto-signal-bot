@@ -539,3 +539,22 @@ requires reviewed generation/reconciliation design. Worker shared paper
 summary/orders are not authenticated owner-isolated reads. Protected review,
 CI on published candidate, provider certification, unified Guardian,
 production deployment and owner-session acceptance remain required.
+
+### Durable cancellation and order history follow-up
+The convergence candidate now serializes pending-order cancellation with
+the existing paper fill lock. The console acknowledges cancellation only
+after a guarded durable update of the pending order succeeds; absent or
+ambiguous durable evidence latches recovery and returns HTTP 503 rather
+than success. Recovery restores filled and cancelled order records in
+addition to valid pending limits, and rejects unresolved durable statuses.
+Three SQLite regressions cover cancellation/restart, missing pending row
+and filled order history. Final validation on Azure: 789 backend tests
+passed (two pre-existing warnings), 57 focused ledger/console route tests
+passed, Ruff and git diff checks passed. The previously verified unchanged
+frontend has 108 passing tests, production build and architecture
+typecheck. No further Claude/Copilot session was started. This is a legacy
+single-process paper compatibility candidate, not a production authority
+migration. Pending order submission and peak persistence still require
+additional durable lifecycle verification; no historical evidence has been
+rewritten. Production deployment remains unchanged and owner/provider
+acceptance gates remain mandatory.
