@@ -323,3 +323,29 @@ transport cases; Worker build and paper-safety passed. Prior checkpoint
 03661d3a CI 45761902412 passed. Actual socket lifecycle ownership,
 authenticated provider retrieval, durable recovery evidence and shared
 authority remain outstanding.
+
+## Bounded testnet transport probe (2026-11-26)
+Added an opt-in, one-shot observation probe using the existing depth transport,
+the documented Binance Spot testnet WebSocket and public REST depth snapshot.
+Reference: https://developers.binance.com/en/docs/products/spot/testnet/web-socket-streams
+One socket, at most one credential-free GET, bounded response size and deadline,
+no redirects on REST, no reconnect/retry, no account or order API. It waits for
+buffered sequence evidence, a snapshot bridge and one subsequent stream event,
+then closes. This is an observation-only diagnostic, not a deployed gateway.
+
+Validation: 115 Worker contract/fast-path tests passed (five new probe cases),
+Worker build and paper-safety passed; Node 22 probe bundle succeeded. Previous
+checkpoint ae9bcb4e CI 45762216690 passed. On Azure, the actual one-shot probe
+at 2026-11-26T06:11:03.078Z opened the testnet socket but reported
+snapshot_unavailable, snapshotReceived=false, bridgeVerified=false,
+subsequentObservation=false, lastSequence=null, exit=1. The precise snapshot
+failure reason was not captured; no retry was made. This confirms socket
+access, not an authenticated account or a verified snapshot bridge.
+Production release attestation returned ok=true, failures=[], paper/testnet,
+mainnet/live/withdrawals/provider mutations/real funds disabled.
+No production deployment, financial operation or provisioning performed.
+
+Run from repository root with existing dependencies:
+  worker/node_modules/.bin/esbuild worker/scripts/run-depth-testnet-probe.ts --bundle --platform=node --format=esm --target=node22 --outfile=/tmp/csb-depth-testnet-probe.mjs
+  timeout -k 2s 12s node /tmp/csb-depth-testnet-probe.mjs
+Only run when permitted by provider/network access; do not circumvent denial.

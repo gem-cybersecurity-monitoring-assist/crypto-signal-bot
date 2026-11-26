@@ -272,3 +272,15 @@ Worker: https://crypto-signal-bot-api.analyzer-d94.workers.dev
 - [ ] Connect the callback boundary to an approved socket/REST transport,
   verify provider and snapshot provenance, and persist recovery evidence.
   No external connection or trading authority is established by replay.
+
+## Testnet transport probe increment
+- [x] Build a bounded, opt-in public testnet socket/snapshot probe and verify
+  cleanup, timeout, rejection and sequence bridge behavior with five new tests.
+- [x] Run one actual Azure testnet connection attempt: socket opened; snapshot
+  unavailable. No successful bridge or subsequent observation was verified.
+- [x] Verify 115 Worker tests, Worker build and paper-safety; prior CI
+  45762216690 passed. Production attestation healthy.
+- [ ] Diagnose snapshot retrieval failure with sanitized HTTP/transport
+  metadata, without bypassing provider/network restrictions. Verify a real
+  snapshot bridge and subsequent event when permitted, then review durable
+  gateway ownership. Guardian/ledger authority and release gates remain open.
