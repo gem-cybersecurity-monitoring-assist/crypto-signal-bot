@@ -51,3 +51,31 @@ async def test_sweep_stops_on_unclear_guardian(monkeypatch, case):
     await executor._executor_sweep()
     equity.assert_not_awaited()
     order.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode,status,success", [
+    ("paper", "FILLED", True),
+    ("paper", "CANCELLED", False),
+    ("paper", "PENDING", False),
+    ("live", "FILLED", False),
+])
+async def test_submit_order_adapts_paper_portfolio_result(monkeypatch, mode, status, success):
+    from backend.services.portfolio import service as portfolio
+    submit = AsyncMock(return_value=SimpleNamespace(id="paper-1", mode=mode, status=status))
+    monkeypatch.setattr(portfolio, "submit_order", submit)
+    result = await executor.submit_order("BTCUSDT", "BUY", 0.01, 100.0)
+    submit.assert_awaited_once_with(symbol="BTCUSDT", side="BUY", qty=0.01,
+                                   order_type="MARKET", price=100.0)
+    if success:
+        assert result == {"id": "paper-1", "status": "FILLED"}
+    else:
+        assert result.get("error")
+
+
+@pytest.mark.asyncio
+async def test_submit_order_reports_portfolio_failure(monkeypatch):
+    from backend.services.portfolio import service as portfolio
+    monkeypatch.setattr(portfolio, "submit_order", AsyncMock(side_effect=RuntimeError("unavailable")))
+    result = await executor.submit_order("BTCUSDT", "BUY", 0.01, 100.0)
+    assert result.get("error")

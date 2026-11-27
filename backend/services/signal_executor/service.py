@@ -124,15 +124,19 @@ async def _anchor_nav_on_start() -> None:
 
 async def submit_order(symbol: str, side: str, qty: float, price: float) -> dict:
     try:
-        from backend.services.portfolio.service import submit_paper_order
-        result = await submit_paper_order(
+        from backend.services.portfolio.service import submit_order as submit_portfolio_order
+        result = await submit_portfolio_order(
             symbol=symbol,
             side=side,
             qty=qty,
             order_type="MARKET",
             price=price,
         )
-        return result or {}
+        # The paper portfolio returns OrderState, not a mapping. A rejected
+        # or pending market order must never be counted as an executed fill.
+        if result.mode != "paper" or result.status != "FILLED":
+            return {"error": "Paper market order did not fill"}
+        return {"id": result.id, "status": result.status}
     except Exception as exc:
         log.error("[executor] submit_order failed %s %s %.6f: %s", side, symbol, qty, exc)
         return {"error": str(exc)}
