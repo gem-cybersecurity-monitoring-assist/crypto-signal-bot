@@ -8,6 +8,8 @@ export interface RealtimeOrderEvent {
   source: string; occurred_at: string; evidence_hash: string; audit_hash: string
 }
 
+const PAGE_SIZE = 100
+
 /** Only immutable event fields are projected, never current mutable fill values. */
 export async function readAuthorizedOrderEvents(
   DB: D1Database, principal: RealtimeReadPrincipal, after: number, now = new Date().toISOString(),
@@ -27,7 +29,7 @@ export async function readAuthorizedOrderEvents(
     o.exchange_account_id, e.previous_state, e.next_state, e.source, e.occurred_at, e.payload_hash, e.audit_event_hash
     FROM live_order_events e JOIN live_orders o ON o.internal_order_id = e.internal_order_id
     WHERE e.sequence_id > ? AND o.exchange_account_id IN (${authorized.map(() => '?').join(',')})
-    ORDER BY e.sequence_id ASC LIMIT 100`).bind(after, ...authorized).all<{
+    ORDER BY e.sequence_id ASC LIMIT ${PAGE_SIZE}`).bind(after, ...authorized).all<{
       sequence_id: number; event_id: string; internal_order_id: string; exchange_account_id: string
       previous_state: string | null; next_state: string; source: string; occurred_at: string
       payload_hash: string; audit_event_hash: string
@@ -56,6 +58,7 @@ export function createRealtimeOrderDelivery(
   let cursor = 0
   let generation = 0
   let closed = false
+  let continuation: number | null = null
   let refreshing = false
   let actorId: string | null = null
   const authorize = dependencies.authorize ?? authenticateManagedRead
@@ -63,6 +66,7 @@ export function createRealtimeOrderDelivery(
   const refresh = async () => {
     if (!token || closed || refreshing) return
     const ownGeneration = generation
+    continuation = null
     refreshing = true
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
@@ -84,7 +88,8 @@ export function createRealtimeOrderDelivery(
         send(event)
         cursor = event.sequence_id
       }
-      send({ type: 'order_stream_status', authenticated: true, cursor })
+      continuation = outcome.events.length === PAGE_SIZE ? cursor : null
+      send({ type: 'order_stream_status', authenticated: true, cursor, more: continuation !== null })
     } catch {
       if (!closed && ownGeneration === generation) {
         token = null
@@ -98,9 +103,13 @@ export function createRealtimeOrderDelivery(
   }
   return {
     refresh,
+    async nextPage(after: unknown) {
+      if (continuation !== null && after === continuation) await refresh()
+    },
     async authenticate(message: unknown) {
       if (closed) return
       const value = message as { access_token?: unknown; after_sequence?: unknown }
+      continuation = null
       generation += 1
       token = null
       actorId = null

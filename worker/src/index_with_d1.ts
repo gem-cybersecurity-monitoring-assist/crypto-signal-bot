@@ -597,6 +597,7 @@ async function handleRealtimeWebSocket(request: Request, env: AgentEnv): Promise
     try {
       const message = JSON.parse(text)
       if (message?.type === 'authenticate_orders') void orderDelivery.authenticate(message)
+      if (message?.type === 'next_order_page') void orderDelivery.nextPage(message.after_sequence)
     } catch { /* Public ping/pong frames contain no private authorization. */ }
   })
 

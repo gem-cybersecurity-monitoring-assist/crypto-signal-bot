@@ -78,7 +78,27 @@ including stalled fetches/bodies that ignore abort signals and oversized streams
 Stable account/snapshot/attestation identifiers and observation timestamps make
 a crash between persistence and queue acknowledgement replayable.
 
+<!-- coderabbit-ai-generated:v1 -->
+
+<!-- coderabbit-ai-generated-section:v1:06677afcf49d10b5d78bd2a1ebfc310d4193267d50d049d974a548043403b990 -->
+
+## Restoring historical task memberships
+
+Apply migration 035 before using the updated ingestion code. The migration restores each task's creator membership. To find historical ingestions that counted shared tasks, compare their stored task counts with their memberships:
+
+```sql
+SELECT i.ingestion_id
+FROM live_recovery_ingestions i
+LEFT JOIN live_recovery_task_memberships m USING (ingestion_id)
+GROUP BY i.ingestion_id, i.accounting_task_count
+HAVING COUNT(m.task_intent_id) < i.accounting_task_count;
+```
+
+For an affected attested binding, replay its original plan, binding ID, attestation ID and linked timestamp through `persistAttestedBitgetRecoveryIngestion`. Replay verifies the plan hash against the binding and restores only missing links to matching immutable intents. It does not post accounting. Evaluate readiness again after replay. If the original evidence cannot be recovered, keep the binding blocked: counts and overlapping time windows cannot identify the missing fills.
+
 ## Remaining stages
+
+<!-- /coderabbit-ai-generated:v1 -->
 
 The integrated source now connects reviewed FIFO dispatch, explicit per-fill
 reservation settlement, zero/partial cancellation release, order completion and

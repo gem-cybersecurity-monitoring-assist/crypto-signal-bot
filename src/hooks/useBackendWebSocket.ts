@@ -89,7 +89,7 @@ export interface WsOrderStateMessage {
   source: string; occurred_at: string; evidence_hash: string; audit_hash: string;
 }
 export interface WsOrderStreamStatusMessage {
-  type: 'order_stream_status'; authenticated: boolean; cursor?: number; code?: string;
+  type: 'order_stream_status'; authenticated: boolean; cursor?: number; more?: boolean; code?: string;
 }
 
 export interface WsPingMessage {
@@ -232,6 +232,10 @@ export function useBackendWebSocket(options: UseBackendWebSocketOptions = {}): W
       }
       if (msg.type === 'order_stream_status') {
         setOrderStreamAuthenticated(msg.authenticated === true);
+        if (msg.authenticated === true && msg.more === true && msg.cursor === eventCursorRef.current
+          && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'next_order_page', after_sequence: msg.cursor }));
+        }
         return;
       }
       setLastMessage(msg);

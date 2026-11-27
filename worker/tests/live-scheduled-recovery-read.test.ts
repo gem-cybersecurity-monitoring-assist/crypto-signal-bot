@@ -266,6 +266,16 @@ test('a later discovery rereads a partially filled order and shares its accounti
     for (const file of readdirSync(root).filter(name => /^(00[3-9]|01\d|02[0-4])_.*\.sql$/.test(name)).sort()) {
       f.db.exec(readFileSync(new URL(file, root), 'utf8'))
     }
+    // Recreate the upgrade boundary: both immutable bindings and the shared
+    // intent predate 035, so applying its SQL restores only the creator link.
+    f.db.exec('DROP TABLE live_recovery_task_memberships')
+    f.db.exec(readFileSync(new URL('035_live_recovery_task_membership.sql', root), 'utf8'))
+    assert.equal(f.count('live_recovery_task_memberships'), 1)
+    f.db.prepare(`UPDATE live_queue_messages SET status='FAILED' WHERE event_id=(
+      SELECT event_id FROM live_queue_messages WHERE message_type='RECONCILE_ACCOUNT' ORDER BY rowid DESC LIMIT 1)`).run()
+    assert.equal((await consumeScheduledRecoveryReads(f.env, next, { fetcher: f.fetcher })).completed, 1)
+    assert.equal(f.count('live_recovery_task_memberships'), 2)
+    assert.equal(f.count('live_recovery_accounting_task_intents'), 1)
     const bindings = f.db.prepare('SELECT binding_id FROM live_bitget_attested_recovery_ingestions').all()
     assert.equal(bindings.length, 2)
     for (const [index, binding] of bindings.entries()) {

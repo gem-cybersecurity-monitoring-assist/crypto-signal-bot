@@ -35,6 +35,21 @@ describe('private realtime order delivery', () => {
     expect(JSON.stringify(f.send.mock.calls)).not.toContain(frame.access_token)
     expect(f.send.mock.calls.filter(([item]) => item.type === 'order_state')).toHaveLength(1)
   })
+  it('drains full pages by cursor, reauthorizes each read and stops on a short page', async () => {
+    const f = fixture()
+    f.read.mockImplementation(async (_db, _principal, after) => Array.from(
+      { length: Math.min(100, 203 - after) }, (_, i) => ({ ...event, sequence_id: after + i + 1 })))
+    await f.stream.authenticate(frame)
+    for (const cursor of [100, 200]) {
+      expect(f.send).toHaveBeenLastCalledWith({ type: 'order_stream_status', authenticated: true, cursor, more: true })
+      await f.stream.nextPage(cursor - 1)
+      await f.stream.nextPage(cursor)
+    }
+    expect(f.send).toHaveBeenLastCalledWith({ type: 'order_stream_status', authenticated: true, cursor: 203, more: false })
+    await f.stream.nextPage(203)
+    expect(f.read.mock.calls.map(call => call[2])).toEqual([0, 100, 200])
+    expect(f.authorize).toHaveBeenCalledTimes(3)
+  })
   it('expired/revoked identity and storage failure disclose no further private events', async () => {
     const f = fixture()
     f.authorize.mockResolvedValue(null)

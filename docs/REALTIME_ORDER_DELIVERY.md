@@ -25,9 +25,13 @@ order/account scope. Delivery includes immutable sequence/event/order/account
 identifiers, previous/next states, source, observation time and payload/audit
 hashes. Current mutable order prices or quantities are not attached to historical
 state transitions. Reconnect replay begins after the last received sequence.
-Each batch is capped at 100 events; the current bounded account read supports up
-to 50 account records. The existing twenty-second status heartbeat refreshes the
-private channel. This is D1 projection delivery, not a sub-second execution path.
+<!-- coderabbit-ai-generated:v1 -->
+
+<!-- coderabbit-ai-generated-section:v1:4d98c9ba04a1bbb8a9d4b5f52b0d99f26282cad9dafa707aa2f7504846debe96 -->
+
+Each batch is capped at 100 events and the account read supports up to 50 accounts. After a full page, the Worker marks the status frame with `more: true`. The dashboard requests the next page at the last received cursor. A short or empty page ends catch-up; the twenty-second heartbeat continues checking for new events.
+
+<!-- /coderabbit-ai-generated:v1 -->
 
 Deployment requires the existing account/order/event schemas, user profile and
 role schemas, the configured Supabase project, an ACTIVE user and a valid scoped

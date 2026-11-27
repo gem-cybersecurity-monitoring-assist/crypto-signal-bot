@@ -46,6 +46,7 @@ class FakeStatement {
 class FakeD1 {
   packageRow: Row
   checkRows: Row[]
+  memberships: Row[] = []
   binding: Row | null = null
   batchCount = 0
   eventCount = 0
@@ -78,6 +79,7 @@ class FakeD1 {
   }
 
   all(sql: string, params: unknown[]): Row[] {
+    if (sql.includes('FROM live_recovery_task_memberships')) return this.memberships
     if (!sql.includes('FROM live_bitget_read_only_certification_checks')) return []
     return this.packageRow.certification_run_id === String(params[0]) ? [...this.checkRows] : []
   }
@@ -309,6 +311,7 @@ test('fixture certification binds only local non-external recovery evidence', as
     plan,
   }, {
     persistIngestion: async () => {
+      database.memberships = plan.accountingTaskIntents.map(task => ({ task_intent_id: task.taskIntentId }))
       persistCount += 1
       return ingestionResult(plan)
     },
@@ -364,6 +367,7 @@ test('identical binding replays without persisting ingestion or another event', 
   }
   const dependencies = {
     persistIngestion: async () => {
+      database.memberships = plan.accountingTaskIntents.map(task => ({ task_intent_id: task.taskIntentId }))
       persistCount += 1
       return ingestionResult(plan)
     },
