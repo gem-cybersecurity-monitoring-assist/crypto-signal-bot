@@ -41,6 +41,7 @@ type Receipt = {
 class FakeD1 {
   receipt: Receipt | null = null
   position: Record<string, unknown> | null = {
+    base_asset: 'BTC', quote_asset: 'USDT',
     quantity: '0.02',
     total_cost_basis_quote: '900',
     average_entry_price: '45000',
@@ -48,18 +49,24 @@ class FakeD1 {
     status: 'OPEN',
   }
   lots: Record<string, unknown>[] = [
-    { lot_id: 'lot-1', original_quantity: '0.01', original_cost_quote: '400' },
-    { lot_id: 'lot-2', original_quantity: '0.01', original_cost_quote: '500' },
+    { base_asset: 'BTC', quote_asset: 'USDT', lot_id: 'lot-1', original_quantity: '0.01', original_cost_quote: '400' },
+    { base_asset: 'BTC', quote_asset: 'USDT', lot_id: 'lot-2', original_quantity: '0.01', original_cost_quote: '500' },
   ]
   consumptions: Record<string, unknown>[] = []
   realizedPnl: Record<string, unknown>[] = [
-    { realized_pnl_quote: '250' },
-    { realized_pnl_quote: '-10' },
+    { base_asset: 'BTC', quote_asset: 'USDT', realized_pnl_quote: '250' },
+    { base_asset: 'BTC', quote_asset: 'USDT', realized_pnl_quote: '-10' },
   ]
   ledgerEntries: Record<string, unknown>[] = [
-    { direction: 'DEBIT', amount: '0.03' },
-    { direction: 'CREDIT', amount: '0.01' },
+    { asset: 'BTC', journal_exchange_account_id: 'bitget-account-ref', direction: 'DEBIT', amount: '0.03' },
+    { asset: 'BTC', journal_exchange_account_id: 'bitget-account-ref', direction: 'CREDIT', amount: '0.01' },
   ]
+  accounts = [
+    {ledger_account_id: 'ledger:BTC:inventory'},
+    {ledger_account_id: 'ledger:BTC:reserved'},
+  ]
+  batchCount = 0
+  failBatchIndex: number | null = null
   queryCount = 0
   insertCount = 0
   statements: FakeStatement[] = []
@@ -89,6 +96,14 @@ class FakeD1 {
     return base as unknown as D1PreparedStatement
   }
 
+  async batch(statements: D1PreparedStatement[]): Promise<D1Result[]> {
+    this.batchCount += 1
+    return Promise.all((statements as unknown as FakeStatement[]).map(async (s, index) => ({
+      success: index !== this.failBatchIndex,
+      results: s.sql.includes('FROM live_position_accounting') ? (this.position ? [this.position] : []) : (await s.all()).results,
+    } as D1Result)))
+  }
+
   async first<T>(sql: string): Promise<T | null> {
     if (sql.includes('FROM live_fill_accounting_reconciliations')) {
       return this.receipt as T | null
@@ -107,6 +122,7 @@ class FakeD1 {
     if (sql.includes('FROM live_realized_pnl_events')) {
       return { results: this.realizedPnl as T[] }
     }
+    if (sql.includes('FROM ledger_accounts')) return { results: this.accounts as T[] }
     if (sql.includes('FROM ledger_entries')) {
       return { results: this.ledgerEntries as T[] }
     }
@@ -184,8 +200,9 @@ test('matching accounting evidence projects an immutable clear reconciliation', 
   assert.equal(result.reservationApplied, false)
   assert.equal(result.executionAllowed, false)
   assert.equal(fake.insertCount, 1)
+  assert.equal(fake.batchCount, 1)
   assert.ok(fake.statements.some((statement) => (
-    statement.sql.includes('FROM ledger_entries')
+    statement.sql.includes('FROM ledger_accounts')
     && statement.sql.includes('AND asset = ?')
   )))
 })
@@ -294,4 +311,102 @@ test('ledger account scope is bounded unique and order-normalized for replay', a
     })),
     /ledgerBaseAccountIds must be unique/,
   )
+})
+
+test('rejects omitted or foreign ledger accounts before creating a receipt', async () => {
+  for (const ids of [['ledger:BTC:inventory'], ['foreign-account', 'ledger:BTC:inventory']]) {
+    const fake = new FakeD1()
+    await assert.rejects(persistFillAccountingReconciliation(fake.env(), input({ledgerBaseAccountIds: ids})),
+      /ledger account scope differs/)
+    assert.equal(fake.insertCount, 0)
+  }
+})
+
+test('rejects mismatched asset and journal evidence without suppressing entries', async () => {
+  for (const field of ['asset', 'journal_exchange_account_id']) {
+    const fake = new FakeD1()
+    fake.ledgerEntries[0][field] = 'WRONG'
+    await assert.rejects(persistFillAccountingReconciliation(fake.env(), input()), /ledger entry asset or journal scope mismatch/)
+    assert.equal(fake.insertCount, 0)
+  }
+})
+
+test('rejects mismatched position, lot and realized PnL assets', async () => {
+  for (const field of ['position', 'lots', 'realizedPnl'] as const) {
+    const fake = new FakeD1()
+    const row = field === 'position' ? fake.position! : fake[field][0]
+    row.quote_asset = 'EUR'
+    await assert.rejects(persistFillAccountingReconciliation(fake.env(), input()), /projection asset scope mismatch/)
+    assert.equal(fake.insertCount, 0)
+  }
+})
+
+test('incomplete or oversized transactional snapshot cannot persist a clear receipt', async () => {
+  const failed = new FakeD1()
+  failed.failBatchIndex = 2
+  await assert.rejects(persistFillAccountingReconciliation(failed.env(), input()), FillAccountingReconciliationUnavailableError)
+  assert.equal(failed.insertCount, 0)
+  const oversized = new FakeD1()
+  oversized.ledgerEntries = Array.from({length: 10001}, () => oversized.ledgerEntries[0])
+  await assert.rejects(persistFillAccountingReconciliation(oversized.env(), input()), FillAccountingReconciliationUnavailableError)
+  assert.equal(oversized.insertCount, 0)
+})
+
+test('canonical reconciliation ID replays without an additional evidence read', async () => {
+  const fake = new FakeD1()
+  const first = await persistFillAccountingReconciliation(fake.env(), input({reconciliationId:' receipt '}))
+  const second = await persistFillAccountingReconciliation(fake.env(), input({reconciliationId:'receipt'}))
+  assert.equal(first.reconciliationHash, second.reconciliationHash)
+  assert.equal(fake.batchCount, 1)
+  assert.equal(fake.insertCount, 1)
+})
+
+test('real SQLite migrations support a transactional snapshot and reject cross-account journals', async () => {
+  const {DatabaseSync} = await import('node:sqlite')
+  const {readFileSync} = await import('node:fs')
+  const db = new DatabaseSync(':memory:')
+  try {
+    db.exec('PRAGMA foreign_keys=ON')
+    for (const file of ['005_live_ledger_and_reservations.sql','015_live_fill_accounting.sql']) {
+      db.exec(readFileSync(new URL('../migrations/'+file,import.meta.url),'utf8'))
+    }
+    db.prepare(`INSERT INTO live_position_accounting
+      (exchange_account_id,product_id,base_asset,quote_asset,quantity,total_cost_basis_quote,
+       cumulative_realized_pnl_quote,status,last_accounting_hash,observed_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?)`).run('bitget-account-ref','BTC-USDT','BTC','USDT','0','0','0','CLOSED','a'.repeat(64),'2026-07-17T22:00:00.000Z')
+    for (const [id,type] of [['ledger:BTC:inventory','INVENTORY_AVAILABLE'],['ledger:BTC:reserved','INVENTORY_RESERVED']]) {
+      db.prepare('INSERT INTO ledger_accounts (ledger_account_id,exchange_account_id,asset,account_type) VALUES (?,?,?,?)')
+        .run(id,'bitget-account-ref','BTC',type)
+    }
+    const adapter = {
+      prepare(sql: string) {
+        const bind = (...params: unknown[]) => ({
+          sql,params,bind,
+          first: async () => db.prepare(sql).get(...params as never[]) ?? null,
+          run: async () => ({success:true,meta:{changes:Number(db.prepare(sql).run(...params as never[]).changes)}}),
+        })
+        return bind()
+      },
+      async batch(statements: {sql:string;params:unknown[]}[]) {
+        db.exec('BEGIN')
+        try {
+          const rows = statements.map(s=>({success:true,results:db.prepare(s.sql).all(...s.params as never[])}))
+          db.exec('COMMIT')
+          return rows
+        } catch (error) {db.exec('ROLLBACK');throw error}
+      },
+    }
+    const env={DB:adapter as unknown as D1Database}
+    const first=await persistFillAccountingReconciliation(env,input({exchangeBaseBalance:asDecimalString('0')}))
+    assert.equal(first.status,'CLEAR')
+    assert.equal(first.executionAllowed,false)
+    db.prepare(`INSERT INTO ledger_journals
+      (journal_id,exchange_account_id,event_type,reference_type,reference_id,correlation_id,idempotency_key)
+      VALUES (?,?,?,?,?,?,?)`).run('foreign-journal','foreign-account','TEST','TEST','ref','correlation','idem')
+    db.prepare(`INSERT INTO ledger_entries (entry_id,journal_id,ledger_account_id,asset,direction,amount)
+      VALUES (?,?,?,?,?,?)`).run('foreign-entry','foreign-journal','ledger:BTC:inventory','BTC','DEBIT','1')
+    await assert.rejects(persistFillAccountingReconciliation(env,input({reconciliationId:'foreign-receipt'})),
+      /ledger entry asset or journal scope mismatch/)
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM live_fill_accounting_reconciliations').get()!.n,1)
+  } finally {db.close()}
 })

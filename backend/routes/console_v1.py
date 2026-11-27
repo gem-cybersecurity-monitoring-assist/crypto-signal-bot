@@ -117,7 +117,13 @@ async def console_status() -> dict:
     Designed to power the Command Console dashboard.
     """
     guardian = await get_guardian_status()
-    portfolio = await get_portfolio_summary()
+    from backend.services.portfolio.service import PortfolioValuationUnavailable
+    try:
+        portfolio = await get_portfolio_summary()
+        valuation_status = "observed"
+    except PortfolioValuationUnavailable:
+        portfolio = {}
+        valuation_status = "unavailable"
     signal_status = get_signal_service_status()
     signals = [
         {
@@ -150,12 +156,13 @@ async def console_status() -> dict:
             "last_heartbeat_at": guardian.last_heartbeat_at,
         },
         "portfolio": {
+            "valuation_status": valuation_status,
             "cash_balance": portfolio.get("cash_balance"),
             "equity":       portfolio.get("equity"),
             "drawdown_pct": portfolio.get("drawdown_pct"),
             "trade_count":  portfolio.get("trade_count"),
-            "win_rate":     portfolio.get("win_rate"),
-            "positions":    portfolio.get("positions", []),
+            "win_rate":     portfolio.get("win_rate_pct"),
+            "positions":    portfolio.get("open_positions"),
         },
         "signals": {
             "running":  signal_status["running"],
@@ -512,7 +519,11 @@ class CancelOrderRequest(BaseModel):
              summary="Cancel a pending limit order",
              dependencies=[Depends(_require_operator)])
 async def console_cancel_order(body: CancelOrderRequest) -> dict:
-    cancelled = cancel_pending_order(body.order_id)
+    from backend.services.portfolio.service import PortfolioRecoveryError
+    try:
+        cancelled = await cancel_pending_order(body.order_id)
+    except PortfolioRecoveryError as exc:
+        raise HTTPException(status_code=503, detail="Cancellation requires durable reconciliation") from exc
     if not cancelled:
         raise HTTPException(
             status_code=404,
@@ -610,10 +621,14 @@ async def console_portfolio_reset(body: PortfolioResetRequest) -> dict:
         raise HTTPException(status_code=400, detail="Set confirm=true to reset the portfolio")
 
     from decimal import Decimal
-    from backend.services.portfolio.service import reset_portfolio
+    from backend.services.portfolio.service import (reset_portfolio, require_ephemeral_reset, PortfolioRecoveryError)
     from backend.services.guardian_bot.service import deactivate_kill_switch, reset_counters
 
-    # 1. Reset portfolio
+    # 1. Reset portfolio only when no durable ledger or recovery latch exists.
+    try:
+        require_ephemeral_reset()
+    except PortfolioRecoveryError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     reset_portfolio(Decimal(str(body.starting_cash)))
 
     # 2. Deactivate kill switch & reset guardian counters

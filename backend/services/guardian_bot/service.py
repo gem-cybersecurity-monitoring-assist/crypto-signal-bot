@@ -201,11 +201,14 @@ def cooldown_remaining_seconds() -> int:
 
 
 async def is_kill_switch_active() -> bool:
+    # An observed local halt must never be cleared by a stale Redis flag.
+    if _kill_switch_active:
+        return True
     try:
         r = await _get_redis()
         if r:
             val = await r.get("KILL_SWITCH:active")
-            return val == "1"
+            return _kill_switch_active or val == "1"
     except Exception:
         pass
     return _kill_switch_active
@@ -390,7 +393,6 @@ async def _check_exchange_health() -> dict:
 
 
 async def get_guardian_status() -> GuardianStatus:
-    cfg = get_risk_config()
     rt = get_runtime_thresholds()
     thresholds = GuardianThresholds(
         max_drawdown_pct=rt["max_drawdown_pct"],
@@ -439,7 +441,6 @@ async def _guardian_loop() -> None:
     log.info("[guardian] Loop started.")
     while _loop_running:
         try:
-            cfg = get_risk_config()
             rt = get_runtime_thresholds()
             thresholds = GuardianThresholds(
                 max_drawdown_pct=rt["max_drawdown_pct"],

@@ -126,7 +126,7 @@ const Auth = () => {
   const handleSignIn = async (event: React.FormEvent) => {
     event.preventDefault();
     const result = signInSchema.safeParse({ email, password });
-    if (!result.success) {
+    if (result.success === false) {
       setErrors(collectErrors(result));
       return;
     }
@@ -152,7 +152,7 @@ const Auth = () => {
   const handleSignUp = async (event: React.FormEvent) => {
     event.preventDefault();
     const result = signUpSchema.safeParse({ email, password, confirmPassword });
-    if (!result.success) {
+    if (result.success === false) {
       setErrors(collectErrors(result));
       return;
     }
@@ -180,7 +180,7 @@ const Auth = () => {
   const handlePasswordReset = async (event: React.FormEvent) => {
     event.preventDefault();
     const result = emailSchema.safeParse(email);
-    if (!result.success) {
+    if (result.success === false) {
       setErrors({ email: result.error.errors[0]?.message || 'Enter a valid email address' });
       return;
     }

@@ -2,13 +2,13 @@ const baseUrl = process.argv[2] ?? "https://crypto-signal-bot-api.analyzer-d94.w
 
 const checks = [
   ["GET", "/healthz", 200, (body) => body.status === "ok" && body.execution_exchange_primary === "btcc" && body.execution_exchange_secondary === "bitget"],
-  ["GET", "/runtime/status", 200, (body) => body.trading_mode === "paper" && body.allow_mainnet === false && body.execution_exchange_primary === "btcc" && body.execution_exchange_secondary === "bitget"],
+  ["GET", "/runtime/status", 200, (body) => body.trading_mode === "paper" && body.exchange_mode === "paper" && body.network === "testnet" && body.allow_mainnet === false && body.live_trading_enabled === false && body.withdrawals_enabled === false && body.execution_exchange_primary === "btcc" && body.execution_exchange_secondary === "bitget"],
   ["GET", "/surge/status", 200, (body) => body.scanner_active === true],
   ["GET", "/guardian/status", 200, (body) => Object.prototype.hasOwnProperty.call(body, "triggered")],
   ["GET", "/portfolio/summary", 200, (body) => body.mode === "paper"],
   ["GET", "/market/feed/status", 200, (body) => body.primary === "coinbase" && body.execution_exchange_primary === "btcc" && body.execution_exchange_secondary === "bitget"],
   ["GET", "/exchange/circuit-breakers", 200, (body) => Array.isArray(body.adapters) && body.execution_exchange_primary === "btcc" && body.execution_exchange_secondary === "bitget"],
-  ["GET", "/v2/infrastructure/status", 200, (body) => body.version === "2.0" && body.runtime?.trading_mode === "paper" && body.runtime?.allow_mainnet === false],
+  ["GET", "/v2/infrastructure/status", 200, (body) => body.version === "2.0" && body.runtime?.trading_mode === "paper" && body.runtime?.allow_mainnet === false && body.runtime?.live_trading_enabled === false && body.runtime?.withdrawals_enabled === false],
   ["GET", "/agent/context", [200, 207], (body) => body.certification_mode === true && body.provider_mutation_enabled === false && body.real_funds_enabled === false && body.execution_exchange_primary === "btcc" && body.execution_exchange_secondary === "bitget"],
   ["GET", "/v1/management/me", 401, (body) => body.code === "UNAUTHENTICATED"],
   ["POST", "/d1/query/readonly", 401, (body) => body.code === 401 || body.error === "Unauthorized"],
@@ -19,22 +19,48 @@ const checks = [
 
 let failed = false;
 
-for (const [method, path, expectedStatus, validateBody] of checks) {
-  const response = await fetch(new URL(path, baseUrl), { method });
-  const text = await response.text();
-  let body;
-  try {
-    body = JSON.parse(text);
-  } catch {
-    body = undefined;
-  }
+const MAX_SMOKE_RESPONSE_BYTES = 64 * 1024;
 
-  const expectedStatuses = Array.isArray(expectedStatus) ? expectedStatus : [expectedStatus];
-  const ok = expectedStatuses.includes(response.status) && body !== undefined && validateBody(body);
-  console.log(`${ok ? "PASS" : "FAIL"} ${method} ${path} -> ${response.status}`);
-  if (!ok) {
+for (const [method, path, expectedStatus, validateBody] of checks) {
+  try {
+    const response = await fetch(new URL(path, baseUrl), { method, redirect: "error", signal: AbortSignal.timeout(12_000) });
+    const declaredLength = response.headers?.get("content-length");
+    if (declaredLength !== null && declaredLength !== undefined &&
+        (!/^\d+$/.test(declaredLength) || Number(declaredLength) > MAX_SMOKE_RESPONSE_BYTES)) {
+      throw new Error("smoke response length invalid");
+    }
+    // Bound actual bytes, even when Content-Length is absent or dishonest.
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error("smoke response stream unavailable");
+    const chunks = [];
+    let size = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > MAX_SMOKE_RESPONSE_BYTES) throw new Error("smoke response exceeds limit");
+        chunks.push(value);
+      }
+    } finally {
+      await reader.cancel().catch(() => {});
+    }
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+    let body;
+    try { body = JSON.parse(new TextDecoder().decode(bytes)); } catch { body = undefined; }
+    const expectedStatuses = Array.isArray(expectedStatus) ? expectedStatus : [expectedStatus];
+    const ok = expectedStatuses.includes(response.status) && body !== undefined && validateBody(body);
+    console.log(`${ok ? "PASS" : "FAIL"} ${method} ${path} -> ${response.status}`);
+    if (!ok) {
+      failed = true;
+      console.error(`Smoke response rejected for ${method} ${path}; body withheld from logs`);
+    }
+  } catch {
     failed = true;
-    console.error(text);
+    console.log(`FAIL ${method} ${path} -> request or response rejected`);
+    console.error(`Smoke request failed for ${method} ${path}; details withheld from logs`);
   }
 }
 

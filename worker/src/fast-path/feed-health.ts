@@ -11,12 +11,13 @@ import {
 } from './types'
 
 type MutableFeedState = Omit<FeedHealthState, 'ephemeral'> & { ephemeral: true }
+type FeedIdentity = Pick<NormalizedMarketEvent, 'source' | 'channel' | 'symbol'>
 
 function copyState(state: MutableFeedState): FeedHealthState {
   return { ...state }
 }
 
-function initialState(event: NormalizedMarketEvent): MutableFeedState {
+function initialState(event: FeedIdentity): MutableFeedState {
   return {
     source: event.source,
     channel: event.channel,
@@ -56,8 +57,14 @@ export class FeedHealthRegistry {
     const state = this.getOrCreate(key, event)
     const validationErrors = validateNormalizedEvent(event)
 
+    if (event.exchangeTsMs > nowMs || event.receivedTsMs > nowMs) validationErrors.push('future_event_timestamp')
+    if (!isHeartbeatEvent(event) && event.sequenceStart === undefined && event.sequenceEnd === undefined) {
+      validationErrors.push('missing_market_sequence')
+    }
+
     if (validationErrors.length > 0) {
       state.rejectedEventCount += 1
+      state.recoveryState = 'unavailable'
       state.integrityState = 'unavailable'
       state.lastErrorCode = validationErrors[0]
       this.refreshState(state, nowMs)
@@ -75,11 +82,9 @@ export class FeedHealthRegistry {
 
     this.rememberEventId(event.eventId)
     state.connectionState = 'connected'
-    state.lastReceivedTsMs = event.receivedTsMs
-    state.lastExchangeTsMs = event.exchangeTsMs
 
     if (isHeartbeatEvent(event)) {
-      state.lastHeartbeatTsMs = event.receivedTsMs
+      state.lastHeartbeatTsMs = Math.max(state.lastHeartbeatTsMs ?? 0, event.receivedTsMs)
       state.heartbeatState = 'healthy'
       state.acceptedEventCount += 1
       state.lastErrorCode = null
@@ -88,6 +93,13 @@ export class FeedHealthRegistry {
       return { accepted: true, reason: 'heartbeat', state: copyState(state) }
     }
 
+    // An observed update cannot repair a known gap or malformed stream by
+    // itself. Only the explicit recovery path may reset that state.
+    if (state.recoveryState === 'resyncing' || state.recoveryState === 'unavailable') {
+      state.rejectedEventCount += 1
+      this.refreshState(state, nowMs)
+      return { accepted: false, reason: 'invalid', state: copyState(state) }
+    }
     const sequenceState = classifySequence(state.lastSequence, event.sequenceStart, event.sequenceEnd)
     state.sequenceState = sequenceState
 
@@ -122,6 +134,8 @@ export class FeedHealthRegistry {
 
     const end = event.sequenceEnd ?? event.sequenceStart
     if (end !== undefined) state.lastSequence = end
+    state.lastReceivedTsMs = event.receivedTsMs
+    state.lastExchangeTsMs = event.exchangeTsMs
     state.acceptedEventCount += 1
     state.lastErrorCode = null
     if (state.recoveryState !== 'healthy') state.recoveryState = 'idle'
@@ -129,9 +143,25 @@ export class FeedHealthRegistry {
     return { accepted: true, reason: 'accepted', state: copyState(state) }
   }
 
+  /** Invalidate observation timestamps before starting a new shadow recovery. */
+  beginRecovery(identity: FeedIdentity, nowMs: number): FeedHealthState {
+    const state = this.getOrCreate(feedKey(identity), identity)
+    state.lastReceivedTsMs = null
+    state.lastExchangeTsMs = null
+    state.sequenceState = 'gap'
+    state.recoveryState = 'resyncing'
+    state.recoveryStartedAtMs = nowMs
+    state.recoveryCompletedAtMs = null
+    state.lastErrorCode = 'SNAPSHOT_RECOVERY_REQUIRED'
+    this.refreshState(state, nowMs)
+    return copyState(state)
+  }
+
   markRecoveryHealthy(key: string, lastSequence: number, nowMs: number): FeedHealthState | null {
     const state = this.feeds.get(key)
-    if (!state) return null
+    if (!state || state.recoveryState !== 'resyncing' || !Number.isSafeInteger(lastSequence) || lastSequence < (state.lastSequence ?? 0)) return null
+    state.lastReceivedTsMs = null
+    state.lastExchangeTsMs = null
     state.lastSequence = lastSequence
     state.sequenceState = 'continuous'
     state.recoveryState = 'healthy'
@@ -171,7 +201,7 @@ export class FeedHealthRegistry {
     this.seenEventOrder.length = 0
   }
 
-  private getOrCreate(key: string, event: NormalizedMarketEvent): MutableFeedState {
+  private getOrCreate(key: string, event: FeedIdentity): MutableFeedState {
     const existing = this.feeds.get(key)
     if (existing) return existing
     if (this.feeds.size >= this.thresholds.maxTrackedFeeds) {
@@ -197,7 +227,7 @@ export class FeedHealthRegistry {
       const sameSource = state.source === event.source
       const sameSymbol = event.symbol === '*' || state.symbol === event.symbol
       if (!sameSource || !sameSymbol) continue
-      state.lastHeartbeatTsMs = event.receivedTsMs
+      state.lastHeartbeatTsMs = Math.max(state.lastHeartbeatTsMs ?? 0, event.receivedTsMs)
       state.heartbeatState = 'healthy'
       this.refreshState(state, nowMs)
     }
@@ -206,7 +236,7 @@ export class FeedHealthRegistry {
   private refreshState(state: MutableFeedState, nowMs: number): void {
     state.eventAgeMs = state.lastExchangeTsMs === null
       ? null
-      : Math.max(0, nowMs - state.lastExchangeTsMs)
+      : nowMs - state.lastExchangeTsMs
 
     state.heartbeatState = this.heartbeatState(state, nowMs)
     state.integrityState = this.integrityState(state)
@@ -230,7 +260,8 @@ export class FeedHealthRegistry {
 
   private heartbeatState(state: MutableFeedState, nowMs: number): HeartbeatState {
     if (state.lastHeartbeatTsMs === null) return 'missing'
-    return nowMs - state.lastHeartbeatTsMs <= this.thresholds.heartbeatTimeoutMs ? 'healthy' : 'stale'
+    const age = nowMs - state.lastHeartbeatTsMs
+    return age >= 0 && age <= this.thresholds.heartbeatTimeoutMs ? 'healthy' : 'stale'
   }
 
   private integrityState(state: MutableFeedState): IntegrityState {
@@ -238,6 +269,7 @@ export class FeedHealthRegistry {
     if (state.recoveryState === 'resyncing' || state.sequenceState === 'gap') return 'resyncing'
     if (state.connectionState !== 'connected') return 'unavailable'
     if (state.sequenceState === 'out_of_order') return 'degraded'
+    if (state.lastReceivedTsMs === null || state.lastExchangeTsMs === null) return 'degraded'
     if (state.heartbeatState !== 'healthy') return 'degraded'
     return 'healthy'
   }

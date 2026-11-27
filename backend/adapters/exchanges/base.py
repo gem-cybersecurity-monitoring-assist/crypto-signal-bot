@@ -37,6 +37,9 @@ class Ticker:
     change24h:  float            # percent, e.g. 2.34 means +2.34%
     volume24h:  Decimal
     timestamp:  int              # unix seconds (UTC)
+    # Provider response clock is distinct from local receipt and trade event time.
+    provider_timestamp_ms: Optional[int] = None
+    provider_timestamp_kind: Optional[str] = None
 
     @property
     def spread_pct(self) -> float:

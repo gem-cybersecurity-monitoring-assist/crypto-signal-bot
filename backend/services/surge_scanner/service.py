@@ -44,6 +44,7 @@ STRONG_POSITION_PCT: float = 0.10   # 10% of equity for high-tier surges
 
 # ── Internal state ─────────────────────────────────────────────────────────────
 _running: bool = False
+_scanner_task: Optional[asyncio.Task] = None
 _run_count: int = 0
 _last_run_at: int = 0
 _alerts_fired: int = 0
@@ -98,14 +99,10 @@ def get_surge_status() -> dict:
 async def _get_current_price(symbol: str) -> Optional[float]:
     """Fetch latest price from market data service."""
     try:
-        from backend.services.market_data.service import get_price, MarketDataStale
-        try:
-            snap = await get_price(symbol)
-            return float(snap.price)
-        except MarketDataStale as e:
-            if e.stale_ticker and e.stale_ticker.price > 0:
-                return float(e.stale_ticker.price)
-        return None
+        from backend.services.market_data.service import get_price
+        from backend.services.portfolio.service import validated_mark
+        snap = await get_price(symbol)
+        return float(validated_mark(snap, symbol))
     except Exception as exc:
         log.debug("[surge_scanner] price fetch failed %s: %s", symbol, exc)
         return None
@@ -311,13 +308,34 @@ async def _scanner_loop() -> None:
         await asyncio.sleep(SCAN_INTERVAL)
 
 
+async def _owned_scanner_loop() -> None:
+    global _running
+    try:
+        await _scanner_loop()
+    finally:
+        _running = False
+
+
 async def start_surge_scanner() -> None:
-    """Launch the surge scanner as a background task."""
-    asyncio.create_task(_scanner_loop(), name="surge_scanner")
-    log.info("[surge_scanner] background task created")
+    """Own the existing scanner; do not start a second loop."""
+    global _scanner_task, _running
+    if _scanner_task is None or _scanner_task.done():
+        _running = True
+        _scanner_task = asyncio.create_task(_owned_scanner_loop(), name="surge_scanner")
 
 
 async def stop_surge_scanner() -> None:
-    global _running
+    global _scanner_task, _running
     _running = False
+    task = _scanner_task
+    if task is None:
+        return
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    finally:
+        if _scanner_task is task:
+            _scanner_task = None
     log.info("[surge_scanner] stopped")

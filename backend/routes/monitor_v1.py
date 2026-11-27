@@ -164,3 +164,28 @@ async def reconfigure_symbols(body: dict) -> dict:
         return {"ok": True, "active_symbols": sorted(pipeline._active)}
     except Exception as exc:
         raise HTTPException(status_code=503, detail=str(exc))
+
+
+@router.get("/runtime-comparison", summary="Read-only cross-runtime state comparison")
+async def compare_runtime_state(x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")) -> dict:
+    """Operator-only diagnostic; unavailable credentials fail closed."""
+    import hmac
+    from backend.services.runtime_comparison import runtime_comparison
+
+    key = get_auth_config().api_key
+    if not key or not x_api_key or not hmac.compare_digest(key.encode(), x_api_key.encode()):
+        raise HTTPException(status_code=401, detail="Operator authentication required")
+    return await runtime_comparison()
+
+
+@router.get("/signal-comparison/{symbol}", summary="Operator-only signal history comparison")
+async def compare_signal_state(symbol: str, x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")) -> dict:
+    import hmac
+    from backend.services.signal_service.worker_observation import SYMBOL, compare_signal_history
+
+    key = get_auth_config().api_key
+    if not key or not x_api_key or not hmac.compare_digest(key.encode(), x_api_key.encode()):
+        raise HTTPException(status_code=401, detail="Operator authentication required")
+    if not SYMBOL.fullmatch(symbol):
+        raise HTTPException(status_code=400, detail="Expected canonical uppercase USDT symbol")
+    return await compare_signal_history(symbol)

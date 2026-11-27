@@ -8,6 +8,7 @@ Patches:
 from __future__ import annotations
 
 import asyncio
+import time
 from decimal import Decimal
 from unittest.mock import AsyncMock, patch
 
@@ -24,8 +25,15 @@ from backend.services.risk_gate.service import evaluate_order
 def _price_mock(value: float):
     snap = AsyncMock()
     snap.price = Decimal(str(value))
+    snap.stale = False
+    snap.market_data_mode = "paper_live"
+    snap.source = "fixture"
+    snap.fetched_at = int(time.time())
     snap.change24h = 2.0
-    return AsyncMock(return_value=snap)
+    async def by_symbol(symbol):
+        snap.symbol = symbol
+        return snap
+    return AsyncMock(side_effect=by_symbol)
 
 
 def _ks_off():
@@ -228,3 +236,18 @@ class TestGuardianManagement:
             await guardian_svc.update_drawdown(0.1)   # 0.1% — always safe
             return guardian_svc._kill_switch_active
         assert run(_t()) is False
+
+
+def test_missing_risk_market_observation_blocks_even_with_supplied_price():
+    with _ks_off(), patch("backend.services.risk_gate.service._get_price_fn", AsyncMock(side_effect=RuntimeError("offline"))):
+        decision = run(evaluate_order("BTCUSDT", "BUY", 0.001, price=50000))
+    assert not decision.approved
+    assert decision.order_qty == 0
+
+
+def test_local_halt_is_not_cleared_by_redis():
+    guardian_svc._kill_switch_active = True
+    redis = AsyncMock()
+    redis.get.return_value = "0"
+    with patch.object(guardian_svc, "_get_redis", AsyncMock(return_value=redis)):
+        assert run(guardian_svc.is_kill_switch_active()) is True

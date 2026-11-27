@@ -57,6 +57,7 @@ _probe_states: Dict[str, ProbeState] = {}
 _last_run_at:  int = 0
 _running:      bool = False
 _run_count:    int = 0
+_monitor_task: Optional[asyncio.Task] = None
 
 
 def get_monitor_status() -> dict:
@@ -112,8 +113,6 @@ async def _process_results(results: List[ProbeResult]) -> None:
         if name not in _probe_states:
             _probe_states[name] = ProbeState()
         state = _probe_states[name]
-        prev_ok = state.last_result.ok if state.last_result else True
-
         state.last_result = result
 
         if result.ok:
@@ -206,7 +205,33 @@ async def _monitor_loop() -> None:
         await asyncio.sleep(PROBE_INTERVAL)
 
 
+async def _owned_monitor_loop() -> None:
+    global _running
+    try:
+        await _monitor_loop()
+    finally:
+        _running = False
+
+
 async def start_monitoring_service(app) -> None:
-    """Register the monitoring background loop with the FastAPI app."""
-    # Direct task creation — called from lifespan() which is already async
-    asyncio.create_task(_monitor_loop())
+    """Own one monitoring task per process."""
+    global _monitor_task, _running
+    if _monitor_task is None or _monitor_task.done():
+        _running = True
+        _monitor_task = asyncio.create_task(_owned_monitor_loop(), name="health_monitor")
+
+
+async def stop_monitoring_service() -> None:
+    global _monitor_task, _running
+    _running = False
+    task = _monitor_task
+    if task is None:
+        return
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    finally:
+        if _monitor_task is task:
+            _monitor_task = None

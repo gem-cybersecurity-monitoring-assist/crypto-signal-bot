@@ -64,3 +64,65 @@ describe('BinanceDepthRecovery', () => {
     expect(result.errorCode).toBe('RECOVERY_TIMEOUT')
   })
 })
+
+describe('recovery evidence isolation', () => {
+  it('rejects a different market symbol instead of bridging unrelated deltas', () => {
+    const recovery = new BinanceDepthRecovery()
+    recovery.bufferDelta(binanceDelta(101, 101), 1010)
+    expect(recovery.bufferDelta({
+      ...binanceDelta(102, 102), symbol: 'ETH-USDT',
+      eventId: 'binance:diff_depth:ETH-USDT:level2:102',
+    }, 1020)).toBe('unavailable')
+    const result = recovery.applySnapshot(100, 1030)
+    expect(result.errorCode).toBe('RECOVERY_SYMBOL_MISMATCH')
+    expect(result.accepted).toEqual([])
+  })
+
+  it('latches buffer overflow rather than silently dropping history', () => {
+    const recovery = new BinanceDepthRecovery({ ...DEFAULT_FAST_PATH_THRESHOLDS, maxBufferedEvents: 1 })
+    recovery.bufferDelta(binanceDelta(101, 101), 1010)
+    expect(recovery.bufferDelta(binanceDelta(102, 102), 1020)).toBe('unavailable')
+    expect(recovery.applySnapshot(101, 1030).errorCode).toBe('RECOVERY_BUFFER_OVERFLOW')
+    recovery.begin(2000)
+    recovery.bufferDelta(binanceDelta(101, 101), 2010)
+    expect(recovery.applySnapshot(100, 2020).state).toBe('healthy')
+  })
+
+  it.each([
+    { source: 'coinbase' as const },
+    { sequenceStart: undefined },
+    { exchangeTsMs: 3000 },
+    { eventId: 'invalid' },
+  ])('rejects invalid recovery evidence %j', override => {
+    const recovery = new BinanceDepthRecovery()
+    expect(recovery.bufferDelta({ ...binanceDelta(101, 101), ...override }, 1010)).toBe('unavailable')
+    expect(recovery.applySnapshot(100, 1020).errorCode).toBe('INVALID_RECOVERY_EVENT')
+  })
+
+  it.each([-1, 1.5, Number.MAX_SAFE_INTEGER + 1])('rejects invalid snapshot sequence %s', sequence => {
+    const recovery = new BinanceDepthRecovery()
+    recovery.bufferDelta(binanceDelta(101, 101), 1010)
+    expect(recovery.applySnapshot(sequence, 1020).errorCode).toBe('INVALID_SNAPSHOT_SEQUENCE')
+  })
+
+  it('does not expose a partial bridge as an applicable batch', () => {
+    const recovery = new BinanceDepthRecovery()
+    recovery.bufferDelta(binanceDelta(101, 101), 1010)
+    recovery.bufferDelta(binanceDelta(103, 103), 1020)
+    const result = recovery.applySnapshot(100, 1030)
+    expect(result.state).toBe('resyncing')
+    expect(result.accepted).toEqual([])
+    expect(result.rejected).toHaveLength(2)
+  })
+
+  it('isolates buffered observations from later caller mutation', () => {
+    const recovery = new BinanceDepthRecovery()
+    const event = binanceDelta(101, 101)
+    recovery.bufferDelta(event, 1010)
+    event.sequenceEnd = 900
+    const result = recovery.applySnapshot(100, 1020)
+    expect(result.state).toBe('healthy')
+    expect(result.lastSequence).toBe(101)
+    expect(result.accepted[0].sequenceEnd).toBe(101)
+  })
+})

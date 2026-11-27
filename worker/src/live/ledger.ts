@@ -90,6 +90,9 @@ function entry(
   direction: LedgerDirection,
   amount: DecimalString,
 ): LedgerEntryDraft {
+  if (direction !== 'DEBIT' && direction !== 'CREDIT') {
+    throw new TypeError('Invalid ledger direction')
+  }
   return {
     entryId: required(entryId, 'entryId'),
     ledgerAccountId: required(ledgerAccountId, 'ledgerAccountId'),
@@ -214,6 +217,9 @@ export function buildReservationReleaseJournal(
 }
 
 export function buildSpotFillJournal(input: SpotFillJournalInput): LedgerJournalDraft {
+  if (input.side !== 'BUY' && input.side !== 'SELL') {
+    throw new TypeError('Invalid spot fill side')
+  }
   const baseAmount = assertPositiveDecimal(input.baseAmount, 'baseAmount')
   const quoteAmount = assertPositiveDecimal(input.quoteAmount, 'quoteAmount')
   const entries: LedgerEntryDraft[] = []

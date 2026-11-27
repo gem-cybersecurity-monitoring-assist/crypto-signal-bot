@@ -2,11 +2,8 @@
 """
 PHASE 11 — Reconciliation service.
 
-Periodically reconciles:
-  - In-process P&L state vs persisted order fills
-  - Paper balance vs sum of USDT movements
-  - Open position lots vs filled orders without closes
-  - Service heartbeat freshness
+Periodically records local P&L observations and detects simple balance drift.
+This diagnostic is not authoritative ledger or cross-runtime reconciliation.
 
 Runs on a timed loop and saves ReconciliationReport to DB.
 Flags discrepancies without auto-correcting — flags require
@@ -26,7 +23,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+import math
 from typing import Optional
 
 from backend.config.loader import get_exchange_config
@@ -36,6 +34,7 @@ log = logging.getLogger(__name__)
 _loop_task: Optional[asyncio.Task] = None
 _loop_running: bool = False
 _last_report: Optional[dict] = None
+_last_successful_report: Optional[dict] = None
 
 RECONCILE_INTERVAL_SECONDS = 300   # every 5 minutes
 
@@ -59,15 +58,13 @@ async def run_reconciliation() -> ReconciliationResult:
 
     Steps:
       1. Read current P&L state from engine/pnl.py
-      2. Compare with last persisted ReconciliationReport
-      3. Detect discrepancies
-      4. Save new report
+      2. Compare recent successful local observation
+      3. Detect simple balance drift
+      4. Persist diagnostic evidence if database is available
       5. Return result
 
-    Discrepancy types:
-      - Balance drift: computed balance != persisted balance
-      - Orphan lots: open lots with no matching buy fill in DB
-      - Missing fills: fills in DB with no matching lot
+    Scope: balance change without a change in trade count.
+    Order-level and cross-runtime accounting remain unverified.
     """
     from backend.engine.pnl import (
         get_usdt_balance,
@@ -78,6 +75,8 @@ async def run_reconciliation() -> ReconciliationResult:
     now = int(time.time())
     cfg = get_exchange_config()
 
+    global _last_report, _last_successful_report
+
     # Collect current state
     try:
         pnl = await get_pnl_summary()
@@ -87,14 +86,25 @@ async def run_reconciliation() -> ReconciliationResult:
         unrealized = float(pnl.total_unrealized_pnl)
         realized   = float(pnl.total_realized_pnl)
         trades     = pnl.trade_count
-    except Exception as exc:
-        log.error("[reconciliation] Failed to read P&L state: %s", exc)
+        if not all(math.isfinite(value) for value in (balance, unrealized, realized)):
+            raise ValueError("Non-finite P&L observation")
+        if type(trades) is not int or trades < 0:
+            raise ValueError("Invalid trade count")
+    except Exception:
+        log.error("[reconciliation] Failed to read P&L state")
+        _last_report = {
+            "mode": cfg.mode, "created_at": now, "observation_status": "unavailable",
+            "persistence_status": "not_written", "discrepancy_detected": True,
+            "discrepancy_detail": "P&L state read failure",
+            "usdt_balance": None, "total_realized_pnl": None,
+            "total_unrealized_pnl": None, "trade_count": None, "open_lots_count": None,
+        }
         return ReconciliationResult(
             mode=cfg.mode, usdt_balance=0.0,
             total_realized_pnl=0.0, total_unrealized_pnl=0.0,
             open_lots_count=0, trade_count=0,
             discrepancy_detected=True,
-            discrepancy_detail=f"P&L state read failure: {exc}",
+            discrepancy_detail="P&L state read failure",
             created_at=now,
         )
 
@@ -102,12 +112,16 @@ async def run_reconciliation() -> ReconciliationResult:
     discrepancy_detail: Optional[str] = None
 
     # Compare with last known report (simple drift check)
-    global _last_report
-    if _last_report:
-        last_balance = _last_report.get("usdt_balance", balance)
+    if (
+        _last_successful_report
+        and _last_successful_report.get("mode") == cfg.mode
+        and _last_successful_report.get("observation_status") == "observed"
+        and 0 <= now - _last_successful_report["created_at"] <= RECONCILE_INTERVAL_SECONDS * 2
+    ):
+        last_balance = _last_successful_report.get("usdt_balance", balance)
         drift = abs(balance - last_balance)
         # Flag if balance changed with no trades since last reconciliation
-        last_trades = _last_report.get("trade_count", trades)
+        last_trades = _last_successful_report.get("trade_count", trades)
         if drift > 0.01 and trades == last_trades:
             discrepancy_detected = True
             discrepancy_detail = (
@@ -129,31 +143,67 @@ async def run_reconciliation() -> ReconciliationResult:
         created_at=now,
     )
 
-    # Persist to DB (Phase 11 wires this once session is available)
-    # async with get_session() as session:
-    #     repo = ReconciliationRepository(session)
-    #     await repo.save(ReconciliationReport(**result.__dict__))
-    #     await session.commit()
-
-    # Cache in-process
-    _last_report = {
-        "usdt_balance":       balance,
-        "total_realized_pnl": realized,
-        "trade_count":        trades,
-        "created_at":         now,
+    # Persist diagnostic evidence through the existing report table. A failed
+    # write is explicit; never claim that the portfolio ledger has reconciled.
+    report = {
+        **asdict(result),
+        "observation_status": "observed",
+        "persistence_status": "pending",
     }
+    _last_report = report
+    _last_successful_report = dict(report)
+    try:
+        await _persist_report(result)
+        report["persistence_status"] = "committed"
+    except Exception:
+        report["persistence_status"] = "unavailable"
+        log.warning("[reconciliation] Diagnostic report persistence unavailable")
 
     if discrepancy_detected:
         log.warning("[reconciliation] Discrepancy: %s", discrepancy_detail)
     else:
-        log.info("[reconciliation] Clean — balance=%.4f realized=%.4f lots=%d",
+        log.info("[reconciliation] No local balance drift detected — balance=%.4f realized=%.4f lots=%d",
                  balance, realized, open_lots_count)
 
     return result
 
 
+async def _persist_report(result: ReconciliationResult) -> None:
+    from backend.db.session import get_session
+    from backend.db.models import ReconciliationReport
+    from backend.db.repositories.base import ReconciliationRepository
+
+    async with get_session() as session:
+        await ReconciliationRepository(session).save(ReconciliationReport(**asdict(result)))
+        await session.commit()
+
+
 async def get_latest_report() -> Optional[dict]:
-    return _last_report
+    """Return the current diagnostic or explicitly historical persisted evidence."""
+    if _last_report is not None:
+        return dict(_last_report)
+    from backend.db.session import get_session
+    from backend.db.models import ReconciliationReport
+    from sqlalchemy import select
+
+    try:
+        mode = get_exchange_config().mode
+        async with get_session() as session:
+            row = (await session.execute(
+                select(ReconciliationReport)
+                .where(ReconciliationReport.mode == mode)
+                .order_by(ReconciliationReport.created_at.desc(), ReconciliationReport.id.desc())
+                .limit(1)
+            )).scalar_one_or_none()
+            if row is None:
+                return None
+            return {
+                **{key: getattr(row, key) for key in ReconciliationResult.__dataclass_fields__},
+                "observation_status": "historical",
+                "persistence_status": "committed",
+            }
+    except Exception:
+        return None
 
 
 async def _reconciliation_loop() -> None:
@@ -172,19 +222,32 @@ async def _reconciliation_loop() -> None:
     log.info("[reconciliation] Loop stopped.")
 
 
+async def _owned_reconciliation_loop() -> None:
+    global _loop_running
+    try:
+        await _reconciliation_loop()
+    finally:
+        _loop_running = False
+
+
 async def start_reconciliation() -> None:
-    global _loop_task
-    if _loop_running:
-        return
-    _loop_task = asyncio.create_task(_reconciliation_loop())
+    global _loop_task, _loop_running
+    if _loop_task is None or _loop_task.done():
+        _loop_running = True
+        _loop_task = asyncio.create_task(_owned_reconciliation_loop(), name="reconciliation")
 
 
 async def stop_reconciliation() -> None:
     global _loop_running, _loop_task
     _loop_running = False
-    if _loop_task and not _loop_task.done():
-        _loop_task.cancel()
-        try:
-            await _loop_task
-        except asyncio.CancelledError:
-            pass
+    task = _loop_task
+    if task is None:
+        return
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    finally:
+        if _loop_task is task:
+            _loop_task = None

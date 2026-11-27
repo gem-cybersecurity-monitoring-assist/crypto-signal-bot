@@ -85,6 +85,8 @@ class CoinbaseAdapter(BaseExchangeAdapter):
     Live order execution raises NotImplementedError.
     """
 
+    exchange_name = "coinbase"
+
     def __init__(self, timeout: float = _TIMEOUT) -> None:
         self._timeout = timeout
         self._circuit_breaker = CircuitBreaker(

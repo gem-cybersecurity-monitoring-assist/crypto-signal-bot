@@ -162,6 +162,8 @@ class CoinGeckoAdapter(BaseExchangeAdapter):
     async def fetch_ticker(self, symbol: str) -> Ticker:
         gecko_id = self._gecko_id(symbol)
         data, err = await _fetch_all_cached()
+        if err or not 0 <= time.time() - _cache_ts < _CACHE_TTL:
+            raise AdapterUnavailableError("CoinGecko fresh observation unavailable")
 
         entry = data.get(gecko_id)
         if not entry:
@@ -186,7 +188,7 @@ class CoinGeckoAdapter(BaseExchangeAdapter):
             spread=spread_val * 2,
             change24h=float(change24h),
             volume24h=Decimal(str(round(volume24h, 2))),
-            timestamp=int(time.time()),
+            timestamp=int(_cache_ts),
         )
 
     # ------------------------------------------------------------------

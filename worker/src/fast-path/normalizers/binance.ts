@@ -46,7 +46,7 @@ export function normalizeBinanceMessage(
   const kind = messageKind(eventType, root)
   const symbolRaw = root.s ?? root.symbol ?? symbolHint ?? 'UNKNOWN-USDT'
   const symbol = normalizeMarketSymbol(symbolRaw, 'USDT')
-  const exchangeTsMs = parseTimestampMs(root.E ?? root.T ?? root.eventTime ?? root.timestamp, receivedTsMs)
+  const exchangeTsMs = parseTimestampMs(root.E ?? root.T ?? root.eventTime ?? root.timestamp, NaN)
   const sequenceStart = sequenceNumber(root.U ?? root.firstUpdateId ?? root.lastUpdateId ?? root.u)
   const sequenceEnd = sequenceNumber(root.u ?? root.finalUpdateId ?? root.lastUpdateId ?? root.U)
   const updates = [

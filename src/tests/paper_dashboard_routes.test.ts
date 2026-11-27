@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { PAPER_DASHBOARD_ROUTES } from '../lib/paperDashboardRoutes';
-import { normalizeWorkerSignal } from '../lib/paperSignal';
+import { isResearchOnlySignal, normalizeWorkerSignal } from '../lib/paperSignal';
 
 describe('paper dashboard Worker route contract', () => {
   it('uses the canonical routes exposed by the deployed Cloudflare Worker', () => {
@@ -36,6 +36,16 @@ describe('paper dashboard signal normalization', () => {
       regime: 'TREND',
       horizon: 60,
     });
+  });
+
+  it('does not convert Python research observations into classified Worker forecasts', () => {
+    const data = {
+      source: 'python_signal_service_cache', symbol: 'BTCUSDT',
+      side: 'BUY', confidence: 72, regime: 'UNKNOWN', horizon: 0, available: true,
+    };
+    expect(isResearchOnlySignal(data)).toBe(true);
+    expect(normalizeWorkerSignal(data, 'BTC')).toBeNull();
+    expect(isResearchOnlySignal({ source: 'worker' })).toBe(false);
   });
 
   it('rejects unavailable or mismatched signal evidence', () => {

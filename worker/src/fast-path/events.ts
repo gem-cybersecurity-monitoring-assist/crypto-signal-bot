@@ -31,7 +31,8 @@ export function positiveNumber(value: unknown): number | undefined {
 }
 
 export function sequenceNumber(value: unknown): number | undefined {
-  const parsed = typeof value === 'number' ? value : Number.parseInt(String(value ?? ''), 10)
+  const parsed = typeof value === 'number' ? value :
+    typeof value === 'string' && /^[0-9]+$/.test(value) ? Number(value) : NaN
   return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : undefined
 }
 
@@ -44,10 +45,14 @@ export function validateNormalizedEvent(event: NormalizedMarketEvent): string[] 
   const errors: string[] = []
   if (event.version !== '2.0') errors.push('unsupported_version')
   if (!event.eventId) errors.push('missing_event_id')
+  else if (event.eventId !== buildMarketEventId(event)) errors.push('invalid_event_id')
   if (!event.channel) errors.push('missing_channel')
   if (!event.symbol) errors.push('missing_symbol')
-  if (!Number.isFinite(event.exchangeTsMs) || event.exchangeTsMs <= 0) errors.push('invalid_exchange_timestamp')
-  if (!Number.isFinite(event.receivedTsMs) || event.receivedTsMs <= 0) errors.push('invalid_received_timestamp')
+  if (!Number.isSafeInteger(event.exchangeTsMs) || event.exchangeTsMs <= 0) errors.push('invalid_exchange_timestamp')
+  if (!Number.isSafeInteger(event.receivedTsMs) || event.receivedTsMs <= 0) errors.push('invalid_received_timestamp')
+  for (const sequence of [event.sequenceStart, event.sequenceEnd]) {
+    if (sequence !== undefined && (!Number.isSafeInteger(sequence) || sequence < 0)) errors.push('invalid_sequence')
+  }
   if (event.sequenceStart !== undefined && event.sequenceEnd !== undefined && event.sequenceStart > event.sequenceEnd) {
     errors.push('invalid_sequence_range')
   }
@@ -72,7 +77,7 @@ export function classifySequence(
 }
 
 export function eventAgeMs(event: Pick<NormalizedMarketEvent, 'exchangeTsMs'>, nowMs: number): number {
-  return Math.max(0, nowMs - event.exchangeTsMs)
+  return nowMs - event.exchangeTsMs
 }
 
 export function isHeartbeatEvent(event: NormalizedMarketEvent): boolean {

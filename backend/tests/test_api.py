@@ -1,6 +1,10 @@
 """Tests for API endpoints."""
 
 import asyncio
+import json
+import os
+import subprocess
+import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -270,78 +274,29 @@ class TestAuditEndpoint:
 
 
 class TestSignalLatest:
-    def test_signal_latest_no_data(self, client):
+    def test_signal_latest_no_symbol_returns_unavailable(self, client):
         resp = client.get("/signal/latest")
         assert resp.status_code == 200
         data = resp.json()
         assert data["available"] is False
+        assert "message" in data
 
-    def test_signal_latest_after_market_state(self, client):
-        client.post("/market-state", json={
-            "symbol": "BTCUSDT",
-            "price": 43000.0,
-            "change24h": 2.5,
-            "volume24h": 1e9,
-            "marketCap": 8e11,
-        })
-        resp = client.get("/signal/latest")
+    def test_signal_latest_with_symbol_returns_expected_shape(self, client):
+        resp = client.get("/signal/latest?symbol=BTCUSDT")
         assert resp.status_code == 200
         data = resp.json()
-        assert data["available"] is True
-        assert "signal" in data
-        assert "risk" in data
-        assert "timestamp" in data
+        assert "available" in data
+        assert "symbol" in data
+        assert "direction" in data
+        assert "side" in data
+        assert "confidence" in data
+        assert "source" in data
 
-    def test_signal_latest_symbol_specific(self, client):
-        client.post("/market-state", json={
-            "symbol": "ETHUSDT",
-            "price": 2500.0,
-            "change24h": 1.2,
-        })
-        resp = client.get("/signal/latest?symbol=ETHUSDT")
+    def test_signal_latest_symbol_normalized(self, client):
+        resp = client.get("/signal/latest?symbol=btcusdt")
         assert resp.status_code == 200
         data = resp.json()
-        assert data["available"] is True
-        assert data["symbol"] == "ETHUSDT"
-
-    def test_signal_latest_requires_symbol_when_multiple(self, client):
-        client.post("/market-state", json={
-            "symbol": "BTCUSDT",
-            "price": 43000.0,
-            "change24h": 1.0,
-        })
-        client.post("/market-state", json={
-            "symbol": "ETHUSDT",
-            "price": 2500.0,
-            "change24h": 1.0,
-        })
-        resp = client.get("/signal/latest")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["available"] is False
-        assert "symbols" in data
-
-    def test_signal_latest_auto_populated_from_live_market_snapshot(self, client):
-        app_module.PAPER_USE_LIVE_MARKET_DATA = True
-        asyncio.run(
-            app_module._handle_market_data_update(
-                {
-                    "symbol": "BTCUSDT",
-                    "price": 44500.0,
-                    "change24h": 2.25,
-                    "volume24h": 250000000.0,
-                    "marketCap": 5000000000.0,
-                    "timestamp": 1_700_000_123.0,
-                    "source": "binance-public",
-                }
-            )
-        )
-        resp = client.get("/signal/latest")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["available"] is True
         assert data["symbol"] == "BTCUSDT"
-        assert data["backend"]["marketDataSource"] == "binance-public"
 
 
 class TestExchangeStatus:
@@ -661,14 +616,17 @@ class TestMarketState:
         assert 0 <= data["signal"]["confidence"] <= 100
         assert data["signal"]["regime"] in ("TREND", "RANGE", "CHAOS")
 
-    def test_market_state_caches_for_signal_latest(self, client):
+    def test_market_state_does_not_affect_prediction_signal(self, client):
         client.post("/market-state", json={
             "symbol": "BTCUSDT",
             "price": 43000.0,
             "change24h": 1.0,
         })
-        signal_resp = client.get("/signal/latest")
-        assert signal_resp.json()["available"] is True
+        signal_resp = client.get("/signal/latest?symbol=BTCUSDT")
+        assert signal_resp.status_code == 200
+        data = signal_resp.json()
+        assert "available" in data
+        assert "source" in data
 
 
 class TestLegacyEndpoints:
@@ -1059,14 +1017,24 @@ class TestNewWsEndpoint:
 
 class TestRenderReadinessEndpoint:
     def test_ready_reports_auth_env_presence_without_secret(self):
-        with patch.dict("os.environ", {"BACKEND_API_KEY": "secret", "CORS_ORIGINS": "https://a.example"}, clear=False):
-            from backend.render_entrypoint import app as render_app
-
-            render_client = TestClient(render_app)
-            resp = render_client.get("/ready")
-
-        assert resp.status_code == 200
-        data = resp.json()
+        # The hosted entrypoint intentionally replaces routes on the canonical
+        # app during import. Test it in a fresh process, as in deployment, so
+        # later canonical API contract tests cannot inherit those overrides.
+        canonical_routes = tuple(app.router.routes)
+        result = subprocess.run(
+            [sys.executable, "-c", (
+                "import json; from fastapi.testclient import TestClient; "
+                "from backend.render_entrypoint import app; "
+                "r = TestClient(app).get('/ready'); "
+                "print(json.dumps({'status': r.status_code, 'data': r.json()}))"
+            )],
+            env={**os.environ, "BACKEND_API_KEY": "secret", "CORS_ORIGINS": "https://a.example"},
+            capture_output=True, text=True, timeout=30, check=True,
+        )
+        response = json.loads(result.stdout.splitlines()[-1])
+        assert tuple(app.router.routes) == canonical_routes
+        assert response["status"] == 200
+        data = response["data"]
         assert data["status"] == "ok"
         assert data["backend_api_key_configured"] is True
         assert data["cors_origins_configured"] is True

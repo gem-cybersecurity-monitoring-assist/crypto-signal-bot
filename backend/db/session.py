@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import (
 
 from backend.config.loader import get_database_config
 from backend.db.models import Base
+from backend.db.paper_ledger_schema import upgrade_paper_ledger_schema
 
 log = logging.getLogger(__name__)
 
@@ -54,12 +55,17 @@ async def init_db() -> None:
     """
     global _engine, _session_factory
 
+    if _engine is not None:
+        if _session_factory is None:
+            raise RuntimeError("Inconsistent database lifecycle state")
+        return
+
     cfg = get_database_config()
     url = _make_url(cfg.url)
 
     log.info("Initialising database: %s", url.split("@")[-1] if "@" in url else url)
 
-    _engine = create_async_engine(
+    engine = create_async_engine(
         url,
         echo=cfg.echo,
         pool_size=cfg.pool_size if "sqlite" not in url else 1,
@@ -67,25 +73,33 @@ async def init_db() -> None:
         pool_pre_ping=True,
     )
 
-    _session_factory = async_sessionmaker(
-        _engine,
-        expire_on_commit=False,
-        class_=AsyncSession,
-    )
+    try:
+        factory = async_sessionmaker(
+            engine,
+            expire_on_commit=False,
+            class_=AsyncSession,
+        )
+        # Publish the session factory only after successful initialization.
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            await conn.run_sync(upgrade_paper_ledger_schema)
+    except BaseException:
+        await engine.dispose()
+        raise
 
-    # Create tables (idempotent — safe in production for new tables)
-    async with _engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
+    _engine = engine
+    _session_factory = factory
     log.info("Database initialised successfully.")
 
 
 async def close_db() -> None:
-    """Dispose the engine at app shutdown."""
-    global _engine
-    if _engine:
-        await _engine.dispose()
-        _engine = None
+    """Reject new sessions before disposing the active engine."""
+    global _engine, _session_factory
+    engine = _engine
+    _session_factory = None
+    _engine = None
+    if engine is not None:
+        await engine.dispose()
         log.info("Database connection closed.")
 
 

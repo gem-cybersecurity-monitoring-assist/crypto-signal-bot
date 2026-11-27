@@ -24,8 +24,8 @@ on:
           - "true"
 
 concurrency:
-  group: cloudflare-worker-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ inputs.deploy_worker == 'true' && 'crypto-signal-bot-production-release' || format('crypto-signal-bot-validation-{0}-{1}', github.workflow, github.ref) }}
+  cancel-in-progress: ${{ inputs.deploy_worker != 'true' }}
 
 env:
   WORKER_URL: https://crypto-signal-bot-api.analyzer-d94.workers.dev
@@ -49,10 +49,18 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
       - name: Validate release selections
-        if: ${{ github.event.inputs.update_vercel == 'true' && github.event.inputs.deploy_worker != 'true' }}
+        env:
+          DEPLOY_WORKER: ${{ inputs.deploy_worker }}
+          UPDATE_VERCEL: ${{ inputs.update_vercel }}
         run: |
-          echo "update_vercel=true requires deploy_worker=true so the Worker is verified before Vercel is updated."
-          exit 1
+          if [[ "$UPDATE_VERCEL" == "true" && "$DEPLOY_WORKER" != "true" ]]; then
+            echo "Updating Vercel requires a verified Worker deployment."
+            exit 1
+          fi
+          if [[ "$DEPLOY_WORKER" == "true" && "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "Production deployment must run from main."
+            exit 1
+          fi
       - name: Lint frontend
         run: npm run lint
       - name: Build frontend
@@ -63,8 +71,13 @@ jobs:
         run: cd worker && npm run build
       - name: Verify paper safety
         run: cd worker && npm run verify:paper-safety
+      - name: Verify Cloudflare account-scope preflight tests
+        run: node --test scripts/verify-cloudflare-token-scope.test.mjs
       - name: Validate Wrangler bundle
-        run: npx wrangler deploy --dry-run --outdir /tmp/crypto-signal-bot-worker-dry-run --config wrangler.toml
+        working-directory: worker
+        env:
+          WRANGLER_SEND_METRICS: 'false'
+        run: ./node_modules/.bin/wrangler deploy --dry-run --outdir "$RUNNER_TEMP/crypto-signal-bot-worker-dry-run" --config ../wrangler.toml
 
   deploy-worker:
     needs: validate
@@ -89,6 +102,9 @@ jobs:
         run: npm run deploy
       - name: Smoke check Worker endpoints
         run: cd worker && npm run smoke -- "$WORKER_URL"
+      - name: Verify public paper release and attestation
+        if: inputs.update_vercel != 'true'
+        run: npm run verify:deployment
 
   update-vercel:
     needs: [validate, deploy-worker]
@@ -108,3 +124,5 @@ jobs:
           node-version: "22.12.0"
       - name: Update Vercel public backend URLs, deploy, promote, and alias
         run: node scripts/vercel-sync-backend-url.mjs
+      - name: Verify promoted public paper release and attestation
+        run: npm run verify:deployment

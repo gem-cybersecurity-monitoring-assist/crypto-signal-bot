@@ -79,3 +79,8 @@ describe('freshness and action authorization', () => {
     expect(result.code).toBe('INVALID_RISK_DECISION')
   })
 })
+
+it.each(['bootstrap','duplicate','not_reported','gap','out_of_order'] as const)('rejects noncontinuous sequence state %s',sequenceState=>{
+  expect(authorizeMarketAction({action:'entry',freshnessClass:'green',integrityState:'healthy',
+    sequenceState,heartbeatState:'healthy',priceOrigin:'live',secondaryConfirmed:true}).allowed).toBe(false)
+})

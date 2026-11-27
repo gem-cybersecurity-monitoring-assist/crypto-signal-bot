@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useState } from 'react';
 import { toast } from 'sonner';
 import { Header } from '@/components/dashboard/Header';
 import { RuntimeStatusStrip } from '@/components/dashboard/RuntimeStatusStrip';
@@ -18,23 +18,23 @@ import type { UserSettings } from '@/components/dashboard/SettingsModal';
 import { SignalPanel } from '@/components/dashboard/SignalPanel';
 import { SystemMetricsPanel } from '@/components/dashboard/SystemMetricsPanel';
 import { useBackendStatus, type EndpointErrors } from '@/hooks/useBackendStatus';
-import { useBackendWebSocket, type WsTickerMessage, type WsHealthMessage } from '@/hooks/useBackendWebSocket';
+import { useBackendWebSocket } from '@/hooks/useBackendWebSocket';
 import { useCryptoPrices } from '@/hooks/useCryptoPrices';
 import { useEarnings } from '@/hooks/useEarnings';
 import { useAuditTrail } from '@/hooks/useAuditTrail';
 import { useBackendMetrics } from '@/hooks/useBackendMetrics';
 import { useGuardianStatus } from '@/hooks/useGuardianStatus';
 import { usePersistedSettings } from '@/hooks/usePersistedSettings';
-import { usePortfolio } from '@/hooks/usePortfolio';
+import { describePortfolioLoadError, usePortfolio } from '@/hooks/usePortfolio';
 import { useSignalEngine } from '@/hooks/useSignalEngine';
 import { useConsole } from '@/hooks/useConsole';
 import { useMonitoring } from '@/hooks/useMonitoring';
 import { CommandConsolePanel } from '@/components/dashboard/CommandConsolePanel';
 import { MonitoringPanel } from '@/components/dashboard/MonitoringPanel';
-import { fetchBackendJson } from '@/lib/backend';
 import { SurgePanel } from '@/components/dashboard/SurgePanel';
 import { useSurgeScanner } from '@/hooks/useSurgeScanner';
 import { useAuth } from '@/context/AuthContext';
+import { useDashboardOrchestration } from '@/hooks/useDashboardOrchestration';
 
 function CertificationModeBanner() {
   return (
@@ -52,7 +52,7 @@ function DiagnosticsWarning({
   backendUrl: string;
 }) {
   const failedEndpoints: string[] = [];
-  if (endpointErrors.balanceError) failedEndpoints.push('balance');
+  if (endpointErrors.balanceError) failedEndpoints.push('portfolio valuation');
   if (endpointErrors.configError) failedEndpoints.push('config');
   if (endpointErrors.exchangeStatusError) failedEndpoints.push('exchange status');
 
@@ -70,7 +70,7 @@ function DiagnosticsWarning({
         <div className="mt-2 space-y-1 text-xs font-mono text-muted-foreground">
           <p>Backend URL: {backendUrl}</p>
           {endpointErrors.balanceError && (
-            <p>Balance error: {endpointErrors.balanceError}</p>
+            <p>Portfolio valuation error: {endpointErrors.balanceError}</p>
           )}
           {endpointErrors.configError && (
             <p>Config error: {endpointErrors.configError}</p>
@@ -140,7 +140,7 @@ const Index = () => {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [operationsView, setOperationsView] = useState<'audit' | 'system' | 'command' | 'monitoring'>('audit');
   const { settings, setSettings } = usePersistedSettings();
-  const { isDemoMode } = useAuth();
+  const { isDemoMode, session, user } = useAuth();
 
   const { health, config, exchangeStatus, paperBalance, isConnected, isLoading: backendLoading, endpointErrors, backendUrl, refetch: refetchStatus } = useBackendStatus();
   const systemMode = health?.mode ?? 'paper';
@@ -150,7 +150,7 @@ const Index = () => {
     preferBackendPrices
   );
   const { guardian, isLoading: guardianLoading, refetch: refetchGuardian } = useGuardianStatus();
-  const { portfolio, isLoading: portfolioLoading, refetch: refetchPortfolio } = usePortfolio();
+  const { portfolio, isLoading: portfolioLoading, error: portfolioError, refetch: refetchPortfolio } = usePortfolio();
   const { summary: earningsSummary, trades: earningsTrades, isLoading: earningsLoading, refetch: refetchEarnings } = useEarnings();
   const { audit, isLoading: auditLoading, refetch: refetchAudit } = useAuditTrail();
   const {
@@ -183,158 +183,28 @@ const Index = () => {
   });
   const selectedBackendSymbol = selectedCoin ? `${selectedCoin.symbol.toUpperCase()}USDT` : null;
 
-  const lastAutoTradeSig = useRef<string | null>(null);
+  const {
+    handleHealthUpdate,
+    handleGuardianAlert,
+    handleKillSwitchChange,
+    handleMarketUpdate,
+    handleExchangeStatus,
+    handleOrderUpdate,
+    handlePortfolioActionComplete,
+    handleEarningsReset,
+    handleTickerUpdate,
+    clearAutoTradeSignature,
+  } = useDashboardOrchestration({
+    settings, signal, risk, selectedCoin, health, systemMode,
+    preferBackendPrices, selectedBackendSymbol,
+    refetchStatus, refetchGuardian, refetchPortfolio,
+    refetchEarnings, refetchAudit, refetchMetrics,
+    refetchPrices, refreshLatestSignal,
+  });
 
-  useEffect(() => {
-    if (
-      !settings.autoTradeEnabled ||
-      !signal ||
-      !risk ||
-      !risk.approved ||
-      !selectedCoin ||
-      health?.kill_switch_active
-    ) {
-      return;
-    }
-
-    if (systemMode === 'live') {
-      toast.warning('Auto-trade skipped: live execution is disabled. Certification controls remain enforced.', { duration: 5000 });
-      return;
-    }
-
-    const sig = `${selectedCoin.id}:${signal.direction}:${signal.regime}`;
-    if (sig === lastAutoTradeSig.current) return;
-    lastAutoTradeSig.current = sig;
-
-    const side = signal.direction === 'DOWN' ? 'SELL' : 'BUY';
-    const notional = risk.positionNotionalUsdt && risk.positionNotionalUsdt > 0
-      ? risk.positionNotionalUsdt
-      : risk.positionSize * 1000;
-    const qty = selectedCoin.price > 0
-      ? Number((notional / selectedCoin.price).toFixed(6))
-      : 0.001;
-
-    fetchBackendJson('/intent/paper', {
-      method: 'POST',
-      body: JSON.stringify({
-        symbol: `${selectedCoin.symbol.toUpperCase()}USDT`,
-        side,
-        order_type: 'MARKET',
-        quantity: Math.max(qty, 0.0001),
-        price: selectedCoin.price,
-      }),
-    })
-      .then(() => {
-        toast.info(
-          `Certification rehearsal: ${side} ${selectedCoin.symbol} (confidence ${signal.confidence}%)`,
-          { duration: 5000 }
-        );
-        refetchPortfolio();
-        refetchAudit();
-        refetchMetrics();
-        refetchStatus();
-      })
-      .catch(() => {
-        // Silently swallow — guardian, balance, or risk rejection; next poll will re-evaluate.
-      });
-  }, [
-    health?.kill_switch_active,
-    refetchAudit,
-    refetchMetrics,
-    refetchPortfolio,
-    refetchStatus,
-    risk,
-    selectedCoin,
-    settings.autoTradeEnabled,
-    signal,
-    systemMode,
-  ]);
-
-  const handleHealthUpdate = useCallback(
-    (_msg: WsHealthMessage) => {
-      refetchStatus();
-    },
-    [refetchStatus]
-  );
-
-  const handleGuardianAlert = useCallback(
-    (msg: { reason: string; kill_switch_active: boolean }) => {
-      toast.error(`Guardian alert: ${msg.reason}`, { duration: 8000 });
-      refetchStatus();
-      refetchGuardian();
-      refetchAudit();
-      refetchMetrics();
-    },
-    [refetchStatus, refetchGuardian, refetchAudit, refetchMetrics]
-  );
-
-  const handleKillSwitchChange = useCallback(() => {
-    refetchStatus();
-    refetchGuardian();
-    refetchAudit();
-    refetchMetrics();
-  }, [refetchStatus, refetchGuardian, refetchAudit, refetchMetrics]);
-
-  const handleMarketUpdate = useCallback(() => {
-    if (preferBackendPrices) {
-      refetchPrices();
-    }
-    refreshLatestSignal();
-  }, [preferBackendPrices, refetchPrices, refreshLatestSignal]);
-
-  const handleExchangeStatus = useCallback(() => {
-    refetchStatus();
-    refetchGuardian();
-    if (preferBackendPrices) {
-      refetchPrices();
-    }
-    refreshLatestSignal();
-  }, [preferBackendPrices, refetchGuardian, refetchPrices, refetchStatus, refreshLatestSignal]);
-
-  const handleOrderUpdate = useCallback(
-    (msg: { status: string; symbol: string; side: string; fill_price: number | null }) => {
-      if (msg.status === 'FILLED') {
-        toast.success(
-          `Order filled: ${msg.side} ${msg.symbol}${msg.fill_price ? ` @ ${msg.fill_price}` : ''}`
-        );
-        refetchStatus();
-        refetchPortfolio();
-        refetchEarnings();
-        refetchAudit();
-        refetchMetrics();
-        const normalizedMsgSymbol = msg.symbol.toUpperCase().replace(/(USDT|USD)$/i, '');
-        const normalizedSelectedSymbol = selectedBackendSymbol?.replace(/(USDT|USD)$/i, '');
-        if (!normalizedSelectedSymbol || normalizedMsgSymbol === normalizedSelectedSymbol) {
-          refreshLatestSignal();
-        }
-      }
-    },
-    [refetchStatus, refetchPortfolio, refetchEarnings, refetchAudit, refetchMetrics, refreshLatestSignal, selectedBackendSymbol]
-  );
-
-  const handlePortfolioActionComplete = useCallback(() => {
-    refetchStatus();
-    refetchGuardian();
-    refetchPortfolio();
-    refetchEarnings();
-    refetchAudit();
-    refetchMetrics();
-  }, [refetchStatus, refetchGuardian, refetchPortfolio, refetchEarnings, refetchAudit, refetchMetrics]);
-
-  const handleEarningsReset = useCallback(() => {
-    refetchEarnings();
-    refetchAudit();
-    refetchMetrics();
-  }, [refetchEarnings, refetchAudit, refetchMetrics]);
-
-  const handleTickerUpdate = useCallback(
-    (_msg: WsTickerMessage) => {
-      // Ticker updates are currently consumed through REST refreshes.
-    },
-    []
-  );
-
-  const { connected: wsConnected } = useBackendWebSocket({
+  const { connected: wsConnected, orderEvents, orderStreamAuthenticated } = useBackendWebSocket({
+    accessToken: isDemoMode ? undefined : session?.access_token,
+    actorId: user?.id,
     onHealthUpdate: handleHealthUpdate,
     onExchangeStatus: handleExchangeStatus,
     onGuardianAlert: handleGuardianAlert,
@@ -346,7 +216,7 @@ const Index = () => {
 
   const handleSettingsChange = (newSettings: UserSettings) => {
     setSettings(newSettings);
-    lastAutoTradeSig.current = null;
+    clearAutoTradeSignature();
     toast.success('Settings updated successfully');
   };
 
@@ -429,7 +299,7 @@ const Index = () => {
         onSelect={setSelectedSymbol}
       />
 
-      <main className="container mx-auto space-y-6 p-4 lg:space-y-8 lg:p-6">
+      <main aria-label="Certification Mode Dashboard" className="container mx-auto space-y-6 p-4 lg:space-y-8 lg:p-6">
         <RuntimeStatusStrip
           backendConnected={isConnected}
           websocketConnected={wsConnected}
@@ -537,6 +407,19 @@ const Index = () => {
           </div>
         </section>
 
+        <section className="space-y-3" aria-label="Order activity">
+          <SectionHeading eyebrow="Orders" title="Order activity"
+            description={orderStreamAuthenticated ? 'Verified account events' : 'Authenticated order updates unavailable'} />
+          <div className="rounded-lg border border-border p-4 font-mono text-sm">
+            {orderEvents.length === 0 ? <p className="text-muted-foreground">No verified order events received.</p> :
+              <ul className="space-y-2">{orderEvents.slice(-10).reverse().map((event) =>
+                <li key={event.event_id} className="flex flex-wrap justify-between gap-2">
+                  <span>{event.order_id} · {event.state.replaceAll('_', ' ')}</span>
+                  <time dateTime={event.occurred_at}>{new Date(event.occurred_at).toLocaleTimeString()}</time>
+                </li>)}</ul>}
+          </div>
+        </section>
+
         <section className="space-y-3">
           <SectionHeading
             eyebrow="Exposure"
@@ -547,6 +430,7 @@ const Index = () => {
             <div className="lg:col-span-8">
               <PortfolioPanel
                 portfolio={portfolio}
+                portfolioError={portfolioError}
                 isLoading={portfolioLoading}
                 selectedSymbol={selectedCoin?.symbol ?? 'BTC'}
                 selectedPrice={selectedCoin?.price ?? 0}

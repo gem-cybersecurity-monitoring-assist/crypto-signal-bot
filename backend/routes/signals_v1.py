@@ -18,6 +18,8 @@ from backend.services.signal_service.service import (
     evaluate_signal,
 )
 
+from backend.services.signal_service.observation import read_observation
+
 router = APIRouter(prefix="/api/v1/signals", tags=["signals_v1"])
 
 _ALLOWED_STRATEGIES = {"ema_crossover", "rsi_mean_revert", "macd_momentum", "combined"}
@@ -96,6 +98,24 @@ async def signals_public() -> List[SignalOut]:
 )
 async def signals_status() -> SignalStatusOut:
     return SignalStatusOut(**get_signal_service_status())
+
+
+@router.get("/prediction/{symbol}", summary="Read-only prediction readiness")
+async def prediction_readiness(symbol: str) -> dict:
+    """Project the existing signal cache, never compute or authorize an order."""
+    symbol = symbol.strip().upper()
+    record, status, clock = read_observation(symbol)
+    return {
+        "symbol": symbol,
+        "status": status,
+        "signal_id": record.id if record is not None else None,
+        "signal": _to_out(record).model_dump() if status == "available" else None,
+        "source": "python_signal_service_cache",
+        "execution_authorized": False,
+        "provider_mutation_allowed": False,
+        "worker_synchronized": False,
+        "provider_clock": clock,
+    }
 
 
 @router.get(

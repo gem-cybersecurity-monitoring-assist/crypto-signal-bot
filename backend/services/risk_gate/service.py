@@ -16,6 +16,7 @@ RULE 5: Risk always overrides strategy — this gate is NOT optional.
 from __future__ import annotations
 
 import logging
+import math
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -123,29 +124,21 @@ async def _evaluate(
     cash = float(port_svc._cash)
     lots = port_svc._lots.get(sym, [])
 
-    # Resolve mark price
-    mark = price
-    if mark is None:
-        try:
-            snap = await _get_price_fn(sym)
-            mark = float(snap.price)
-        except Exception:
-            mark = 0.0
-
-    # Per-symbol position value
-    pos_value = sum(float(l.qty) * float(mark) for l in lots)
-
-    # Total portfolio exposure
+    # Require a current provider-attributed snapshot even when the caller
+    # supplied a proposed limit or fill price. Missing marks cannot imply
+    # zero exposure or authorize a new paper allocation.
+    snap = await _get_price_fn(sym)
+    observed_mark = float(port_svc.validated_mark(snap, sym))
+    mark = observed_mark if price is None else float(price)
+    if not math.isfinite(mark) or mark <= 0 or not math.isfinite(qty) or qty <= 0:
+        raise ValueError("Invalid paper risk inputs")
+    pos_value = sum(float(l.qty) * observed_mark for l in lots)
     total_exp = 0.0
-    for s, s_lots in port_svc._lots.items():
+    for s, s_lots in tuple(port_svc._lots.items()):
         if not s_lots:
             continue
-        try:
-            snap = await _get_price_fn(s)
-            p = float(snap.price)
-        except Exception:
-            p = mark if s == sym else 0.0
-        total_exp += sum(float(l.qty) * float(p) for l in s_lots)
+        p = observed_mark if s == sym else float(port_svc.validated_mark(await _get_price_fn(s), s))
+        total_exp += sum(float(l.qty) * p for l in s_lots)
 
     # Daily realized PnL
     now = int(time.time())
@@ -155,14 +148,18 @@ async def _evaluate(
         if t.realized_pnl is not None and t.executed_at >= day_start
     )
 
-    # 24h volatility proxy
-    vol_24h = 0.0
-    try:
-        snap = await _get_price_fn(sym)
-        if hasattr(snap, "change24h") and snap.change24h is not None:
-            vol_24h = abs(float(snap.change24h)) / 100.0
-    except Exception:
-        pass
+    # No invented zero-volatility fallback on an unavailable observation.
+    vol_24h = abs(float(snap.change24h)) / 100.0
+    if not math.isfinite(vol_24h):
+        raise ValueError("Invalid market volatility observation")
+
+    # Recheck the halt after asynchronous market-data work.
+    if await is_kill_switch_active() or is_in_cooldown():
+        return RiskGateDecision(
+            approved=False, order_qty=0.0, original_qty=qty, size_multiplier=0.0,
+            kill_switch=True, rules_passed=[], rules_failed=["GuardianRecheck"],
+            reasons=["Guardian halt or cooldown at risk evaluation completion"], risk_score=100.0,
+        )
 
     nav = float(cash) + float(total_exp)  # Net Asset Value
 

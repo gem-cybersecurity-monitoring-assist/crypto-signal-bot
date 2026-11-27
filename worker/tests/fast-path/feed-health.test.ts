@@ -85,3 +85,64 @@ describe('FeedHealthRegistry', () => {
     expect(stale?.freshnessClass).toBe('red')
   })
 })
+
+describe('rejected evidence cannot refresh a market observation', () => {
+  it('retains the prior accepted timestamp after a sequence gap', () => {
+    const registry = new FeedHealthRegistry()
+    registry.ingest(eventFixture(), 1010)
+    registry.ingest(heartbeatFixture(), 1020)
+    const gap = registry.ingest(eventFixture({
+      eventId: 'coinbase:l2_data:BTC-USD:level2:3', sequenceStart: 3, sequenceEnd: 3,
+      exchangeTsMs: 2000, receivedTsMs: 2010,
+    }), 2010)
+    expect(gap.accepted).toBe(false)
+    expect(gap.state.lastExchangeTsMs).toBe(1000)
+    expect(gap.state.lastReceivedTsMs).toBe(1010)
+    const late = registry.ingest(eventFixture({
+      eventId: 'coinbase:l2_data:BTC-USD:level2:2', sequenceStart: 2, sequenceEnd: 2,
+      exchangeTsMs: 2020, receivedTsMs: 2030,
+    }), 2030)
+    expect(late.accepted).toBe(false)
+    expect(late.state.integrityState).toBe('resyncing')
+    expect(late.state.lastSequence).toBe(1)
+    expect(registry.markRecoveryHealthy(key, 3, 2040)?.eventAgeMs).toBeNull()
+  })
+
+  it('rejects future and malformed observations, latching unavailable state', () => {
+    const registry = new FeedHealthRegistry()
+    registry.ingest(eventFixture(), 1010)
+    registry.ingest(heartbeatFixture(), 1020)
+    const future = registry.ingest(eventFixture({
+      eventId: 'coinbase:l2_data:BTC-USD:level2:2', sequenceStart: 2, sequenceEnd: 2,
+      exchangeTsMs: 3000, receivedTsMs: 3010,
+    }), 2000)
+    expect(future.accepted).toBe(false)
+    expect(future.state.integrityState).toBe('unavailable')
+    expect(future.state.lastExchangeTsMs).toBe(1000)
+    const next = registry.ingest(eventFixture({
+      eventId: 'coinbase:l2_data:BTC-USD:level2:3', sequenceStart: 3, sequenceEnd: 3,
+      exchangeTsMs: 2000, receivedTsMs: 2010,
+    }), 2010)
+    expect(next.accepted).toBe(false)
+    expect(next.state.integrityState).toBe('unavailable')
+  })
+
+  it('does not substitute heartbeat timestamp for accepted market data', () => {
+    const registry = new FeedHealthRegistry()
+    registry.ingest(eventFixture(), 1010)
+    registry.ingest(heartbeatFixture({ exchangeTsMs: 3015, receivedTsMs: 3020 }), 3020)
+    expect(registry.get(key, 3020)?.lastExchangeTsMs).toBe(1000)
+    expect(registry.get(key, 3020)?.freshnessClass).toBe('red')
+  })
+
+  it('rejects noncanonical identities and missing market sequences', () => {
+    for (const event of [
+      eventFixture({ eventId: 'different-source' }),
+      eventFixture({ eventId: 'coinbase:l2_data:BTC-USD:level2:1000', sequenceStart: undefined, sequenceEnd: undefined }),
+    ]) {
+      const registry = new FeedHealthRegistry()
+      expect(registry.ingest(event).accepted).toBe(false)
+      expect(registry.get(key)?.lastExchangeTsMs).toBeNull()
+    }
+  })
+})

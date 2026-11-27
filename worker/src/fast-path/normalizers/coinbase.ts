@@ -50,7 +50,7 @@ export function normalizeCoinbaseMessage(
   const root = asRecord(payload)
   const channel = String(root.channel ?? root.type ?? 'unknown')
   const rootSequence = sequenceNumber(root.sequence_num ?? root.sequence)
-  const rootExchangeTs = parseTimestampMs(root.timestamp, receivedTsMs)
+  const rootExchangeTs = parseTimestampMs(root.timestamp, NaN)
   const rawEvents = Array.isArray(root.events) && root.events.length > 0 ? root.events : [root]
   const normalized: NormalizedMarketEvent[] = []
 

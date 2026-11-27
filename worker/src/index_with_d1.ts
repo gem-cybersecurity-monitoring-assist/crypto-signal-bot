@@ -1,9 +1,11 @@
+import { createRealtimeOrderDelivery } from './routes/realtime-order-events'
 import worker, { requireApiKey, checkRateLimit, type Env } from './index'
 import { evaluatePaperIntentRisk } from './paper-intent-risk'
 import { evaluatePaperTraderAccess } from './paper-trader-access'
 import { fastPathDecisionMetrics, fastPathFeedRegistry } from './fast-path'
 import { buildV2InfrastructureStatus } from './routes/v2-infrastructure'
 import { buildV2MarketFeedsStatus } from './routes/v2-market-feeds'
+import { buildRealtimeFeedStatus } from './routes/realtime-feed-status'
 import {
   handleAgentContextRequest,
   type AgentContextEnv,
@@ -181,23 +183,40 @@ async function readD1Status(env: Env): Promise<'healthy' | 'unavailable'> {
 }
 
 async function readGuardianSnapshot(env: Env) {
-  const row = await env.DB.prepare(
-    'SELECT triggered, reason, drawdown_pct FROM guardian_state WHERE id = 1 LIMIT 1',
-  ).first<{ triggered: number | boolean; reason: string | null; drawdown_pct: number }>().catch(() => null)
+  type GuardianSnapshotRow = { triggered: number | boolean; reason: string | null; drawdown_pct: number; updated_at: string | null }
+  let row: GuardianSnapshotRow | null = null
+  try {
+    row = await env.DB.prepare(
+      'SELECT triggered, reason, drawdown_pct, updated_at FROM guardian_state WHERE id = 1 LIMIT 1',
+    ).first<GuardianSnapshotRow>()
+  } catch {
+    // A failed read is unknown Guardian state, never clearance.
+  }
+  const available = row !== null && [true, false, 0, 1].includes(row.triggered)
+  const stamp = row?.updated_at
+  const parsed = typeof stamp === 'string' && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(stamp)
+    ? Date.parse(stamp.replace(' ', 'T') + 'Z') : NaN
+  const stateUpdatedAt = available && Number.isFinite(parsed) && parsed <= Date.now() &&
+    new Date(parsed).toISOString().slice(0, 19).replace('T', ' ') === stamp
+    ? new Date(parsed).toISOString() : null
+  const rowStatus: 'recorded' | 'unavailable' | 'invalid_timestamp' =
+    !available ? 'unavailable' : stateUpdatedAt === null ? 'invalid_timestamp' : 'recorded'
   return {
-    halted: row?.triggered === true || row?.triggered === 1,
-    reason: row?.reason ?? null,
+    stateUpdatedAt,
+    rowStatus,
+    halted: !available || row?.triggered === true || row?.triggered === 1,
+    reason: !available ? 'GUARDIAN_STATE_UNAVAILABLE' : row?.reason ?? null,
     drawdownPct: numberOr(row?.drawdown_pct),
     maxDrawdownPct: numberOr(env.GUARDIAN_MAX_DRAWDOWN_PCT, 15),
   }
 }
 
 async function handleV2Infrastructure(request: Request, env: Env): Promise<Response> {
-  const nowMs = Date.now()
   const [guardian, d1Status] = await Promise.all([
     readGuardianSnapshot(env),
     readD1Status(env),
   ])
+  const nowMs = Date.now()
   const payload = buildV2InfrastructureStatus({
     guardian,
     d1Status,
@@ -542,37 +561,53 @@ async function handleRealtimeWebSocket(request: Request, env: AgentEnv): Promise
     }
   }
 
-  const guardian = await readGuardianSnapshot(env)
+  const orderDelivery = createRealtimeOrderDelivery(request, env, send)
   send({ type: 'status', ws: 'online', backend: 'online' })
-  send({
-    type: 'health',
-    kill_switch_active: guardian.halted,
-    mode: 'paper',
-    api_error_count: 0,
-    guardian_triggered: guardian.halted,
-    market_data_mode: 'live_public_paper',
-    market_data_connected: true,
-  })
-  send({
-    type: 'exchange_status',
-    exchange: env.MARKET_DATA_PUBLIC_EXCHANGE || 'coinbase',
-    market_data_mode: 'live_public_paper',
-    connected: true,
-    connection_state: 'connected',
-    fallback_active: false,
-    last_update_ts: Date.now(),
-    last_error: null,
-    stale: false,
-    symbols: [],
-    source: env.MARKET_DATA_PUBLIC_EXCHANGE || 'coinbase',
-  })
+  let refreshing = false
+  let closed = false
+  const refreshStatus = async () => {
+    if (refreshing || closed) return
+    refreshing = true
+    try {
+      const guardian = await readGuardianSnapshot(env)
+      const feed = buildRealtimeFeedStatus(fastPathFeedRegistry.list(), env.MARKET_DATA_PUBLIC_EXCHANGE || 'coinbase')
+      if (closed) return
+      send({
+        type: 'health',
+        kill_switch_active: guardian.halted,
+        mode: 'paper',
+        api_error_count: null,
+        guardian_triggered: guardian.halted,
+        market_data_mode: 'live_public_paper',
+        market_data_connected: feed.connected,
+      })
+      send(feed)
+    } finally {
+      refreshing = false
+    }
+  }
+  await refreshStatus()
 
-  const heartbeat = setInterval(() => send({ type: 'ping' }), 20_000)
-  const cleanup = () => clearInterval(heartbeat)
+  const heartbeat = setInterval(() => {
+    send({ type: 'ping' })
+    void refreshStatus().catch(() => cleanup())
+    void orderDelivery.refresh()
+  }, 20_000)
+  const cleanup = () => {
+    closed = true
+    clearInterval(heartbeat)
+    orderDelivery.close()
+  }
   server.addEventListener('close', cleanup)
   server.addEventListener('error', cleanup)
   server.addEventListener('message', (event) => {
-    if (String(event.data).toLowerCase() === 'ping') send({ type: 'ping' })
+    const text = String(event.data)
+    if (text.toLowerCase() === 'ping') send({ type: 'ping' })
+    if (text.length > 9000) return
+    try {
+      const message = JSON.parse(text)
+      if (message?.type === 'authenticate_orders') void orderDelivery.authenticate(message)
+    } catch { /* Public ping/pong frames contain no private authorization. */ }
   })
 
   return new Response(null, { status: 101, webSocket: client })

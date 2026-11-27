@@ -16,6 +16,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, field_validator
 
 from backend.services.portfolio.service import (
+    PortfolioValuationUnavailable,
     get_daily_pnl,
     get_equity_history,
     get_order,
@@ -109,13 +110,17 @@ class PortfolioOut(BaseModel):
 async def create_order(body: OrderRequest) -> OrderOut:
     if body.order_type == "LIMIT" and body.price is None:
         raise HTTPException(status_code=422, detail="price required for LIMIT orders")
-    order = await submit_order(
-        symbol=body.symbol,
-        side=body.side,
-        order_type=body.order_type,
-        qty=body.qty,
-        price=body.price,
-    )
+    from backend.services.portfolio.service import PortfolioRecoveryError
+    try:
+        order = await submit_order(
+            symbol=body.symbol,
+            side=body.side,
+            order_type=body.order_type,
+            qty=body.qty,
+            price=body.price,
+        )
+    except PortfolioRecoveryError as exc:
+        raise HTTPException(status_code=503, detail="Order persistence requires reconciliation") from exc
     return OrderOut(
         **{
             "id": order.id,
@@ -164,7 +169,10 @@ async def get_order_route(order_id: str) -> OrderOut:
     summary="Full portfolio summary with positions and PnL",
 )
 async def portfolio_summary() -> PortfolioOut:
-    data = await get_portfolio_summary()
+    try:
+        data = await get_portfolio_summary()
+    except PortfolioValuationUnavailable as exc:
+        raise HTTPException(status_code=503, detail="Complete portfolio valuation unavailable") from exc
     return PortfolioOut(**data)
 
 
@@ -226,7 +234,10 @@ async def positions_detail() -> List[PositionDetailOut]:
     Returns each open position with unrealized PnL, realized PnL,
     notional value, PnL %, and lot count — sorted by notional value descending.
     """
-    return [PositionDetailOut(**p) for p in await get_positions_detail()]
+    try:
+        return [PositionDetailOut(**p) for p in await get_positions_detail()]
+    except PortfolioValuationUnavailable as exc:
+        raise HTTPException(status_code=503, detail="Complete portfolio valuation unavailable") from exc
 
 
 @router.get(
@@ -247,7 +258,10 @@ async def daily_pnl(
     Today's unrealized PnL is computed live.
     Sorted newest-first.
     """
-    rows = await get_daily_pnl(days=days)
+    try:
+        rows = await get_daily_pnl(days=days)
+    except PortfolioValuationUnavailable as exc:
+        raise HTTPException(status_code=503, detail="Complete portfolio valuation unavailable") from exc
     return [DailyPnlOut(**r) for r in rows]
 
 
@@ -300,13 +314,15 @@ async def reset_portfolio_route(body: PortfolioResetRequest) -> PortfolioResetOu
 
     from backend.config.runtime import get_runtime_config
     from backend.logic import context
-    from backend.logic.audit_store import append_risk_event
+    from backend.audit.store import append_risk_event
     from backend.services.guardian_bot.service import (
         deactivate_kill_switch,
         get_guardian_status,
         reset_counters,
     )
-    from backend.services.portfolio.service import reset_portfolio as reset_portfolio_service
+    from backend.services.portfolio.service import (
+        PortfolioRecoveryError, require_ephemeral_reset, reset_portfolio as reset_portfolio_service,
+    )
     from backend.services.signal_executor.service import _last_acted
 
     cfg = get_runtime_config()
@@ -324,6 +340,10 @@ async def reset_portfolio_route(body: PortfolioResetRequest) -> PortfolioResetOu
     starting_balance = float(body.starting_cash)
     reason = body.reason or "Manual portfolio reset via API"
 
+    try:
+        require_ephemeral_reset()
+    except PortfolioRecoveryError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     reset_portfolio_service(starting_cash=Decimal(str(starting_balance)))
 
     context.guardian_starting_nav = starting_balance

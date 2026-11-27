@@ -101,3 +101,29 @@ test('unbalanced journals are rejected with per-asset differences', () => {
     },
   )
 })
+
+test('rejects an unknown journal direction even when amounts would otherwise balance', () => {
+  const journal = buildReservationJournal({
+    journalId: 'direction-test', exchangeAccountId: 'test-account', orderId: 'test-order',
+    correlationId: 'test-correlation', idempotencyKey: 'test-idempotency-key',
+    asset: 'USDT', amount: asDecimalString('10'), availableAccountId: 'available', reservedAccountId: 'reserved',
+  })
+  const malformed = {
+    ...journal,
+    entries: journal.entries.map((entry, index) => index === 1
+      ? { ...entry, direction: 'UNKNOWN' as 'CREDIT' } : entry),
+  }
+  assert.throws(() => validateBalancedJournal(malformed), /Invalid ledger direction/)
+})
+
+test('rejects unknown fill sides instead of implicitly treating them as sells', () => {
+  assert.throws(() => buildSpotFillJournal({
+    journalId: 'side-test', exchangeAccountId: 'test-account', orderId: 'test-order',
+    fillId: 'test-fill', correlationId: 'test-correlation', idempotencyKey: 'test-idempotency-key',
+    side: 'UNKNOWN' as 'SELL', baseAsset: 'BTC', quoteAsset: 'USDT',
+    baseAmount: asDecimalString('0.01'), quoteAmount: asDecimalString('100'),
+    baseInventoryAccountId: 'base-inventory', baseReservedAccountId: 'base-reserved',
+    baseClearingAccountId: 'base-clearing', quoteAvailableAccountId: 'quote-available',
+    quoteReservedAccountId: 'quote-reserved', quoteClearingAccountId: 'quote-clearing',
+  }), /Invalid spot fill side/)
+})

@@ -1,0 +1,191 @@
+import { describe, it, expect } from 'vitest'
+import { PortfolioReplayLedger, PortfolioState, type ReplayFill } from '../../src/durable-objects/PortfolioState'
+class AtomicFixture {
+  values = new Map<string, unknown>()
+  tail: Promise<unknown> = Promise.resolve()
+  failOutbox = false
+  transaction<T>(fn: (tx: DurableObjectTransaction) => Promise<T>): Promise<T> {
+    const run = this.tail.then(async () => {
+      const next = structuredClone(this.values)
+      const tx = {
+        get: async (key: string) => structuredClone(next.get(key)),
+        put: async (key: string, value: unknown) => {
+          if (this.failOutbox && key.startsWith('paper-replay:outbox:')) throw new Error('Injected rollback')
+          next.set(key, structuredClone(value))
+        },
+      }
+      const result = await fn(tx as unknown as DurableObjectTransaction)
+      this.values = next
+      return result
+    })
+    this.tail = run.catch(() => undefined)
+    return run
+  }
+}
+const event = (overrides: Partial<ReplayFill> = {}): ReplayFill => ({
+  mode:'isolated_paper_replay',portfolioId:'test-portfolio',eventId:'buy1',
+  expectedVersion:0,symbol:'BTC-USDT',side:'BUY',quantity:'2',simulatedPrice:'100',simulatedFee:'2',...overrides,
+})
+async function setup() {
+  const storage = new AtomicFixture()
+  const ledger = new PortfolioReplayLedger(storage)
+  await ledger.initialize('test-portfolio','1000')
+  return {ledger,storage}
+}
+describe('isolated atomic portfolio replay', () => {
+  it('commits one receipt and one outbox event for concurrent duplicates', async () => {
+    const {ledger,storage}=await setup()
+    const results=await Promise.all([ledger.apply(event()),ledger.apply(event())])
+    expect(results.map(r=>r.replayed).sort()).toEqual([false,true])
+    expect(results[0].id).toBe(results[1].id)
+    expect((await ledger.snapshot())?.cash).toBe('798')
+    expect([...storage.values.keys()].filter(k=>k.includes(':outbox:'))).toHaveLength(1)
+  })
+  it('rejects changed payload under the same event identity', async () => {
+    const {ledger}=await setup()
+    await ledger.apply(event())
+    await expect(ledger.apply(event({quantity:'3'}))).rejects.toThrow('identity conflict')
+    expect((await ledger.snapshot())?.version).toBe(1)
+  })
+  it('rolls back state and receipt when the outbox write fails', async () => {
+    const {ledger,storage}=await setup()
+    storage.failOutbox=true
+    await expect(ledger.apply(event())).rejects.toThrow('Injected rollback')
+    expect((await ledger.snapshot())?.cash).toBe('1000')
+    expect(storage.values.size).toBe(1)
+    storage.failOutbox=false
+    expect((await ledger.apply(event())).replayed).toBe(false)
+  })
+  it('reconstructs FIFO partial and full closes, fees and protected reserve', async () => {
+    const {ledger,storage}=await setup()
+    await ledger.apply(event())
+    const after=await ledger.apply(event({eventId:'sell1',expectedVersion:1,side:'SELL',quantity:'1',simulatedPrice:'120',simulatedFee:'1'}))
+    expect(after.realizedPnl).toBe('18')
+    expect(after.state.protectedReserve).toBe('4.5')
+    expect(after.state.cash).toBe('912.5')
+    expect(after.state.positions[0].lots).toEqual([{quantity:'1',cost:'101'}])
+    const restarted=new PortfolioReplayLedger(storage)
+    const final=await restarted.apply(event({eventId:'sell2',expectedVersion:2,side:'SELL',quantity:'1',simulatedPrice:'90',simulatedFee:'1'}))
+    expect(final.state.positions).toEqual([])
+    expect(final.state.realizedPnl).toBe('6')
+    expect(final.state.cash).toBe('1001.5')
+    expect(final.state.protectedReserve).toBe('4.5')
+    expect(final.executionAuthorized).toBe(false)
+  })
+  it('rejects insufficient cash and inventory without partial mutation', async () => {
+    const {ledger}=await setup()
+    await expect(ledger.apply(event({quantity:'100'}))).rejects.toThrow('reusable cash')
+    await expect(ledger.apply(event({side:'SELL'}))).rejects.toThrow('inventory')
+    expect((await ledger.snapshot())?.version).toBe(0)
+  })
+  it('rejects stale versions and cross-portfolio events', async () => {
+    const {ledger}=await setup()
+    await ledger.apply(event())
+    await expect(ledger.apply(event({eventId:'buy2'}))).rejects.toThrow('version conflict')
+    await expect(ledger.apply(event({portfolioId:'other'}))).rejects.toThrow('portfolio mismatch')
+  })
+  it('preserves halt across reconstructed owners and rejects later events', async () => {
+    const {ledger,storage}=await setup()
+    await ledger.halt('test-portfolio')
+    const restarted=new PortfolioReplayLedger(storage)
+    await expect(restarted.apply(event({expectedVersion:1}))).rejects.toThrow('halted')
+    expect((await restarted.snapshot())?.halted).toBe(true)
+  })
+  it('rejects unbound and cross-portfolio object identities', async () => {
+    for (const name of [undefined, 'wrong-portfolio']) {
+      const obj=new PortfolioState({storage:new AtomicFixture(),id:{name}} as unknown as DurableObjectState)
+      await expect(obj.ledger.initialize('test-portfolio','1000')).rejects.toThrow('scope mismatch')
+    }
+  })
+  it('does not expose a public mutation route', async () => {
+    const obj=new PortfolioState({storage:new AtomicFixture(),id:{name:"test-portfolio"}} as unknown as DurableObjectState)
+    expect((await obj.fetch()).status).toBe(403)
+  })
+})
+
+describe('replay accounting conservation and outbox evidence', () => {
+  it('holds exact conservation across repeated fractional FIFO closes and losses', async () => {
+    const {ledger}=await setup()
+    let version=0
+    for(let i=0;i<20;i++){
+      await ledger.apply(event({eventId:'cycle-buy-'+i,expectedVersion:version++,quantity:'0.123456789',simulatedPrice:'100.123456789',simulatedFee:'0.001'}))
+      await ledger.apply(event({eventId:'cycle-partial-'+i,expectedVersion:version++,side:'SELL',quantity:'0.023456789',simulatedPrice:i%2?'90':'120',simulatedFee:'0.0001'}))
+      await ledger.apply(event({eventId:'cycle-close-'+i,expectedVersion:version++,side:'SELL',quantity:'0.1',simulatedPrice:'110',simulatedFee:'0.0002'}))
+    }
+    const final=await ledger.snapshot()
+    expect(final?.version).toBe(60)
+    expect(final?.positions).toEqual([])
+    const {assertReplayConservation}=await import('../../src/durable-objects/replay-accounting-invariant')
+    expect(()=>assertReplayConservation(final!)).not.toThrow()
+    const first=await ledger.outboxPage(0)
+    const last=await ledger.outboxPage(first.length)
+    expect(first.length).toBe(32)
+    expect(last.length).toBe(28)
+  })
+  it('detects corruption before any later write or outbox publication', async () => {
+    const {ledger,storage}=await setup()
+    await ledger.apply(event())
+    const state=storage.values.get('paper-replay:state') as Record<string,unknown>
+    state.cash='799'
+    await expect(ledger.snapshot()).rejects.toThrow('conservation failed')
+    await expect(ledger.apply(event({eventId:'next',expectedVersion:1}))).rejects.toThrow('conservation failed')
+    await expect(ledger.outboxPage(0)).rejects.toThrow('conservation failed')
+    expect(storage.values.size).toBe(3)
+  })
+  it('rejects missing outbox events instead of skipping versions', async () => {
+    const {ledger,storage}=await setup()
+    await ledger.apply(event())
+    storage.values.delete('paper-replay:outbox:1')
+    await expect(ledger.outboxPage(0)).rejects.toThrow('outbox integrity failure')
+  })
+})
+
+describe('atomic replay market valuation and drawdown latch',()=>{
+  const marks=(overrides:Partial<import('../../src/durable-objects/PortfolioState').ReplayValuationInput>={})=>({
+    mode:'isolated_paper_replay' as const,portfolioId:'test-portfolio',eventId:'mark1',
+    expectedVersion:1,atMs:1000,marks:[{symbol:'BTC-USDT',price:'120'}],...overrides,
+  })
+  it('marks inventory, tracks peak and latches drawdown without changing book accounting',async()=>{
+    const {ledger,storage}=await setup()
+    await ledger.apply(event())
+    const first=await ledger.mark(marks())
+    expect(first.state.valuation).toMatchObject({equity:'1038',marketValue:'240',unrealizedPnl:'38',drawdownPct:'0'})
+    expect(first.state.peakEquity).toBe('1038')
+    const low=await ledger.mark(marks({eventId:'mark2',expectedVersion:2,atMs:2000,marks:[{symbol:'BTC-USDT',price:'40'}]}))
+    expect(low.state.valuation?.equity).toBe('878')
+    expect(low.state.haltReason).toBe('replay_drawdown_limit')
+    expect(low.state.cash).toBe('798')
+    const restored=new PortfolioReplayLedger(storage)
+    await expect(restored.apply(event({eventId:'next',expectedVersion:3}))).rejects.toThrow('halted')
+    const high=await restored.mark(marks({eventId:'mark3',expectedVersion:3,atMs:3000}))
+    expect(high.state.halted).toBe(true)
+    expect((await restored.outboxPage(0)).map(e=>e.type)).toEqual(['replay_fill','replay_valuation','replay_valuation','replay_valuation'])
+  })
+  it('rejects incomplete mark sets and clock regressions, preserves duplicate receipts',async()=>{
+    const {ledger}=await setup()
+    await ledger.apply(event())
+    await expect(ledger.mark(marks({marks:[]}))).rejects.toThrow('Incomplete')
+    const first=await ledger.mark(marks())
+    expect((await ledger.mark(marks())).replayed).toBe(true)
+    await expect(ledger.mark(marks({marks:[{symbol:'BTC-USDT',price:'121'}]}))).rejects.toThrow('identity conflict')
+    await expect(ledger.mark(marks({eventId:'later',expectedVersion:2,atMs:999}))).rejects.toThrow('clock regression')
+    expect((await ledger.snapshot())?.version).toBe(first.state.version)
+  })
+  it('invalidates a mark after a fill, retains peak and refuses a backward mark',async()=>{
+    const {ledger}=await setup()
+    await ledger.apply(event())
+    await ledger.mark(marks())
+    const sold=await ledger.apply(event({eventId:'sell',expectedVersion:2,side:'SELL',quantity:'1'}))
+    expect(sold.state.valuation).toBeNull()
+    expect(sold.state.peakEquity).toBe('1038')
+    await expect(ledger.mark(marks({eventId:'old',expectedVersion:3,atMs:1000}))).rejects.toThrow('clock regression')
+  })
+  it('rolls back a valuation and halt if outbox persistence fails',async()=>{
+    const {ledger,storage}=await setup()
+    await ledger.apply(event())
+    storage.failOutbox=true
+    await expect(ledger.mark(marks({marks:[{symbol:'BTC-USDT',price:'1'}]}))).rejects.toThrow('Injected rollback')
+    expect((await ledger.snapshot())?.halted).toBe(false)
+    expect((await ledger.snapshot())?.valuation).toBeNull()
+  })
+})

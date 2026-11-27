@@ -40,6 +40,21 @@ def clean_process_signal_state():
     signal_override._signal_overrides.clear()
 
 
+@pytest.fixture(autouse=True)
+def isolate_audit_store(tmp_path, monkeypatch):
+    """Keep each test's audit records and mock objects out of other tests."""
+    from backend.audit import store
+
+    monkeypatch.setenv("AUDIT_STORE_PATH", str(tmp_path / "audit.json"))
+    monkeypatch.setenv("EVENT_LOG_PATH", str(tmp_path / "event_log.db"))
+    monkeypatch.setenv("EVENT_LOG_ENABLED", "false")
+    store._cache = None
+    store._event_log_store_instance = None
+    yield
+    store._cache = None
+    store._event_log_store_instance = None
+
+
 def pytest_configure(config):
     """Configure pytest with custom markers and options."""
     config.addinivalue_line(

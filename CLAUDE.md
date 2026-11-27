@@ -155,3 +155,12 @@ For each major phase:
 - Files touched
 - Tests run
 - Remaining risks
+
+## Current continuation checkpoint
+
+Before starting a new implementation pass, read
+[the consolidated final-completion checklist](docs/CLAUDE_FINAL_COMPLETION_TODO.md)
+and [the integration validation evidence](docs/CLAUDE_INTEGRATION_VALIDATION.md).
+Resume the upstream PR #295 integration branch rather than rebuilding the old
+fork. AGENTS.md and SAFE_FAST_PATH remain authoritative for architecture and
+release safety; inspect current head and coordinate with ongoing release work.

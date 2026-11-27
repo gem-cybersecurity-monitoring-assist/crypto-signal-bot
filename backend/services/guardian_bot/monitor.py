@@ -17,9 +17,12 @@ import time
 log = logging.getLogger(__name__)
 
 MONITOR_INTERVAL = 30  # seconds
+_monitor_task: asyncio.Task | None = None
+_last_successful_cycle_at: int | None = None
 
 
 async def _monitor_loop() -> None:
+    global _last_successful_cycle_at
     from backend.services.guardian_bot.service import (
         update_drawdown, update_daily_loss, record_heartbeat,
     )
@@ -29,7 +32,7 @@ async def _monitor_loop() -> None:
     while True:
         await asyncio.sleep(MONITOR_INTERVAL)
         try:
-            # Use full equity (cash + unrealized P&L), not just cash.
+            # Use marked equity (cash + market value), not just cash.
             # This prevents false drawdown triggers when capital is deployed into positions.
             equity = await port_svc._compute_equity()
             peak   = port_svc._peak_equity
@@ -47,6 +50,7 @@ async def _monitor_loop() -> None:
             await update_drawdown(dd)
             await update_daily_loss(daily_loss_pct)
             record_heartbeat()
+            _last_successful_cycle_at = int(time.time())
 
             log.debug("[guardian_monitor] equity=%.2f peak=%.2f dd=%.2f%% daily_loss=%.2f%%",
                       equity, peak, dd, daily_loss_pct)
@@ -55,5 +59,23 @@ async def _monitor_loop() -> None:
 
 
 async def start_guardian_monitor(app) -> None:
-    # Direct task creation — called from lifespan() which is already async
-    asyncio.create_task(_monitor_loop())
+    global _monitor_task, _last_successful_cycle_at
+    if _monitor_task is None or _monitor_task.done():
+        _last_successful_cycle_at = None
+        _monitor_task = asyncio.create_task(_monitor_loop(), name="guardian_monitor")
+
+
+async def stop_guardian_monitor() -> None:
+    global _monitor_task, _last_successful_cycle_at
+    _last_successful_cycle_at = None
+    task = _monitor_task
+    if task is None:
+        return
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    finally:
+        if _monitor_task is task:
+            _monitor_task = None

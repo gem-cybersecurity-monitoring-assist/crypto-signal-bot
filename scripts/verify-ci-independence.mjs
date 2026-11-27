@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -41,6 +42,16 @@ if (workflowFiles.length === 0) {
 
 for (const filename of workflowFiles) {
   const source = fs.readFileSync(path.join(workflowsRoot, filename), 'utf8')
+  // Preserve the existing credential-free Worker PR check without allowing
+  // other automatic GitHub workflows or silent changes to this exception.
+  // Any modification requires explicit review and updating the pinned digest.
+  if (filename === 'worker-signal-contract.yml') {
+    const digest = createHash('sha256').update(source).digest('hex')
+    if (digest !== '8a06b41b7fb355a26019d5a69c752baa9f5fcbd2ca79a555612f6fe3cb28f6fd') {
+      throw new Error('Worker signal contract workflow changed; review the automated CI exception')
+    }
+    continue
+  }
   const onBlock = topLevelOnBlock(source, filename)
   if (!/^  workflow_dispatch:\s*$/m.test(onBlock)) {
     throw new Error(`${filename} must remain explicitly manual through workflow_dispatch`)
@@ -141,5 +152,5 @@ for (const dependency of [
 }
 
 console.log(
-  `CI billing independence verified (${workflowFiles.length} GitHub workflows are manual-only; CircleCI owns the aggregate gate).`,
+  `CI billing independence verified (${workflowFiles.length} GitHub workflows checked; only the pinned Worker contract workflow may run automatically; CircleCI owns the aggregate gate).`,
 )

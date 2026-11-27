@@ -12,20 +12,20 @@ Every EXECUTOR_INTERVAL seconds the loop:
   4. If the signal returns to FLAT, close any open position.
 
 Changes (NAV anchor + Telegram alerts):
-  - On cold start, anchor guardian NAV to current portfolio equity so a
-    pre-existing paper loss does not immediately re-trigger the kill switch.
+  - On cold start, preserve the existing Guardian state and drawdown.
   - On every fill (open/close), fire Telegram trade alert to GEM channel.
 """
 from __future__ import annotations
 
 import asyncio
+import math
 import logging
 import os
 import time
 from typing import Dict
 
 from backend.config.settings import get_settings as _get_settings
-from backend.logic.decision_tracer import decision_tracer, HoldReason
+from backend.audit.tracer import decision_tracer, HoldReason
 
 log = logging.getLogger(__name__)
 
@@ -41,7 +41,30 @@ _last_acted: Dict[str, tuple] = {}
 _running:    bool = False
 _run_count:  int  = 0
 _last_run_at: int = 0
-_nav_anchored: bool = False   # NAV anchor flag — set once on first run
+_nav_anchored: bool = False   # Legacy status field: no automatic NAV reset
+_startup_observed: bool = False
+
+
+def _trace_hold(symbol: str, reason_code: str, description: str, conf: float = 0.0,
+                threshold: float | None = None, actual: float | None = None) -> None:
+    """Record a HOLD decision trace without crashing the executor on tracer errors."""
+    try:
+        entry = decision_tracer.make_entry(
+            symbol=symbol,
+            decision="HOLD",
+            side=None,
+            confidence=conf,
+            strategy_id="combined",
+            signal_side="FLAT",
+            equity=0.0,
+            notional=0.0,
+            mode="paper",
+            hold_reasons=[HoldReason(code=reason_code, description=description,
+                                     threshold=threshold, actual=actual)],
+        )
+        decision_tracer.record(entry)
+    except Exception:
+        pass
 
 
 def get_executor_status() -> dict:
@@ -54,27 +77,28 @@ def get_executor_status() -> dict:
         "position_pct":      POSITION_PCT,
         "max_positions":     MAX_POSITIONS,
         "nav_anchored":      _nav_anchored,
+        "startup_observed":  _startup_observed,
         "last_acted":        {s: {"side": v[0], "strategy_id": v[1]}
                               for s, v in _last_acted.items()},
     }
 
 
 async def _get_equity() -> float:
-    try:
-        from backend.services.portfolio.service import get_portfolio_summary
-        summary = await get_portfolio_summary()
-        return float(summary.get("equity", 10000.0))
-    except Exception:
-        return 10000.0
+    from backend.services.portfolio.service import get_portfolio_summary
+    summary = await get_portfolio_summary()
+    equity = float(summary["equity"])
+    if not math.isfinite(equity) or equity <= 0:
+        raise ValueError("Portfolio equity unavailable")
+    return equity
 
 
 async def _get_open_positions() -> list:
-    try:
-        from backend.services.portfolio.service import get_portfolio_summary
-        summary = await get_portfolio_summary()
-        return summary.get("open_positions", [])
-    except Exception:
-        return []
+    from backend.services.portfolio.service import get_portfolio_summary
+    summary = await get_portfolio_summary()
+    positions = summary["open_positions"]
+    if not isinstance(positions, list):
+        raise ValueError("Portfolio positions unavailable")
+    return positions
 
 
 async def _get_open_qty(symbol: str) -> float:
@@ -91,44 +115,28 @@ async def _count_open_positions() -> int:
 
 
 async def _anchor_nav_on_start() -> None:
-    """
-    On cold start, anchor the guardian's peak equity to the current portfolio
-    equity so a pre-existing paper drawdown does not immediately re-trigger
-    the kill switch when the executor resumes.
-    """
-    global _nav_anchored
-    if _nav_anchored:
-        return
-    try:
-        equity = await _get_equity()
-        from backend.services.guardian_bot import service as guardian
-        # Reset guardian counters and re-anchor drawdown baseline to current equity
-        await guardian.reset_kill_switch()
-        # Force peak equity to current equity so drawdown starts from here
-        guardian._drawdown_pct = 0.0
-        log.info("[executor] NAV anchored to current equity $%.2f on cold start", equity)
-        # Send Telegram notification
-        try:
-            from backend.services.telegram_alerts import send_guardian_reset
-            await send_guardian_reset(equity)
-        except Exception:
-            pass
-    except Exception as exc:
-        log.warning("[executor] NAV anchor failed: %s", exc)
-    _nav_anchored = True
+    """Mark startup observed without resetting any existing risk state."""
+    global _startup_observed
+    if not _startup_observed:
+        log.info("[executor] Startup observed; existing Guardian state preserved")
+        _startup_observed = True
 
 
 async def submit_order(symbol: str, side: str, qty: float, price: float) -> dict:
     try:
-        from backend.services.portfolio.service import submit_paper_order
-        result = await submit_paper_order(
+        from backend.services.portfolio.service import submit_order as submit_portfolio_order
+        result = await submit_portfolio_order(
             symbol=symbol,
             side=side,
             qty=qty,
             order_type="MARKET",
             price=price,
         )
-        return result or {}
+        # The paper portfolio returns OrderState, not a mapping. A rejected
+        # or pending market order must never be counted as an executed fill.
+        if result.mode != "paper" or result.status != "FILLED":
+            return {"error": "Paper market order did not fill"}
+        return {"id": result.id, "status": result.status}
     except Exception as exc:
         log.error("[executor] submit_order failed %s %s %.6f: %s", side, symbol, qty, exc)
         return {"error": str(exc)}
@@ -146,8 +154,8 @@ async def _fire_trade_alert(
     entry_price: float = 0.0,
 ) -> None:
     """Non-blocking Telegram alert — errors are swallowed so they never block trading."""
-    equity = await _get_equity()
     try:
+        equity = await _get_equity()
         from backend.services.telegram_alerts import send_trade_open, send_trade_close
         if action == "open":
             await send_trade_open(symbol, side, qty, price, confidence, strategy, equity)
@@ -167,11 +175,19 @@ async def _executor_sweep() -> None:
     try:
         from backend.services.guardian_bot import service as guardian
         status = await guardian.get_guardian_status()
-        if status.kill_switch_active:
-            log.debug("[executor] Kill switch active — skipping sweep")
+        if (
+            status.kill_switch_active is not False
+            or status.triggered is not False
+            or status.heartbeat_healthy is not True
+            or status.reconciliation_drift_active is not False
+            or status.in_cooldown is not False
+            or await guardian.is_kill_switch_active()
+        ):
+            log.debug("[executor] Guardian not clear — skipping sweep")
             return
-    except Exception as exc:
-        log.warning("[executor] Guardian check failed: %s", exc)
+    except Exception:
+        log.warning("[executor] Guardian check unavailable — skipping sweep")
+        return
 
     # Get current signals
     try:
@@ -181,8 +197,12 @@ async def _executor_sweep() -> None:
         log.error("[executor] Failed to get signals: %s", exc)
         return
 
-    equity = await _get_equity()
-    open_count = await _count_open_positions()
+    try:
+        equity = await _get_equity()
+        open_count = await _count_open_positions()
+    except Exception:
+        log.warning("[executor] Portfolio valuation unavailable — skipping sweep")
+        return
 
     for sig in signals:
         symbol = sig.get("symbol", "")
@@ -211,17 +231,21 @@ async def _executor_sweep() -> None:
                         pnl=pnl, entry_price=entry_px
                     ))
                     _last_acted.pop(symbol, None)
-            decision_tracer.record(symbol, HoldReason.SIGNAL_FLAT, {"side": "FLAT", "conf": conf})
+            _trace_hold(symbol, "SIGNAL_FLAT", "Signal is FLAT", conf=conf)
             continue
 
         # ── Confidence gate ─────────────────────────────────────────
         if conf < MIN_CONFIDENCE:
-            decision_tracer.record(symbol, HoldReason.LOW_CONFIDENCE, {"conf": conf, "min": MIN_CONFIDENCE})
+            _trace_hold(symbol, "LOW_CONFIDENCE", "Confidence below threshold",
+                       conf=conf, threshold=MIN_CONFIDENCE, actual=conf)
             continue
 
         # ── Same signal — no action ──────────────────────────────────
         if last is not None and last[0] == side and last[1] == strat:
-            decision_tracer.record(symbol, HoldReason.SIGNAL_UNCHANGED, {"side": side})
+            _trace_hold(
+                symbol, "SIGNAL_UNCHANGED",
+                f"Signal unchanged: {side}", conf=conf,
+            )
             continue
 
         # ── Close opposite position if exists ────────────────────────
@@ -241,7 +265,8 @@ async def _executor_sweep() -> None:
 
         # ── Position cap ─────────────────────────────────────────────
         if open_count >= MAX_POSITIONS:
-            decision_tracer.record(symbol, HoldReason.MAX_POSITIONS, {"open": open_count, "max": MAX_POSITIONS})
+            _trace_hold(symbol, "MAX_POSITIONS", f"At position cap ({open_count}/{MAX_POSITIONS})",
+                       conf=conf, threshold=float(MAX_POSITIONS), actual=float(open_count))
             continue
 
         # ── Size and open ────────────────────────────────────────────

@@ -91,6 +91,19 @@ _FETCH_SEMAPHORE_LIMIT = 6
 # Latency + freshness tracking
 # ---------------------------------------------------------------------------
 
+# Adapter attribution is not authenticated provider event-time evidence.
+CANDLE_SOURCES = frozenset({"binance", "binance_us_ohlcv", "bitget", "coinbase"})
+
+
+@dataclass(frozen=True)
+class CandleObservation:
+    symbol: str
+    interval: str
+    source: str
+    fetched_at: int
+    candles: tuple[OhlcvCandle, ...]
+
+
 @dataclass
 class SymbolMetrics:
     """Per-symbol ingestion telemetry."""
@@ -173,6 +186,8 @@ class IngestionPipeline:
     def __init__(self) -> None:
         self._buffers:   Dict[str, CandleRingBuffer] = {}
         self._metrics:   Dict[str, SymbolMetrics]    = {}
+        self._observations: Dict[str, CandleObservation] = {}
+        self._buffer_sources: Dict[str, str] = {}
         self._task:      Optional[asyncio.Task]       = None
         self._running:   bool                         = False
         self._semaphore: Optional[asyncio.Semaphore]  = None
@@ -199,6 +214,14 @@ class IngestionPipeline:
             return []
         return buf.latest(n)
 
+    def get_observation(self, symbol: str, n: int) -> Optional[CandleObservation]:
+        """Return a single fetched batch, never a cross-provider merged history."""
+        obs = self._observations.get(symbol.upper())
+        now = int(time.time())
+        if obs is None or not 0 <= now - obs.fetched_at <= FRESHNESS_WARN_THRESHOLD:
+            return None
+        return CandleObservation(obs.symbol, obs.interval, obs.source, obs.fetched_at, obs.candles[-n:])
+
     def get_metrics(self) -> Dict[str, dict]:
         """Return serializable ingestion telemetry for /monitor/ingestion."""
         out: Dict[str, dict] = {}
@@ -211,6 +234,7 @@ class IngestionPipeline:
                 "error_count":          m.error_count,
                 "candle_count":         len(self._buffers.get(sym, [])),
                 "stale":                m.stale,
+                "candle_source":        self._buffer_sources.get(sym),
             }
         return out
 
@@ -251,6 +275,8 @@ class IngestionPipeline:
         for sym in self._active - new_active:
             self._buffers.pop(sym, None)
             self._metrics.pop(sym, None)
+            self._observations.pop(sym, None)
+            self._buffer_sources.pop(sym, None)
             log.info("[ingestion] Removed symbol: %s", sym)
 
         self._active = new_active
@@ -342,6 +368,7 @@ class IngestionPipeline:
                 adapters = await _get_adapters()
                 candles: Optional[List[OhlcvCandle]] = None
                 last_exc: Optional[Exception] = None
+                source = None
 
                 for adapter in adapters:
                     try:
@@ -350,7 +377,9 @@ class IngestionPipeline:
                             interval=CANDLE_INTERVAL,
                             limit=RING_BUFFER_SIZE,
                         )
-                        break  # first success wins
+                        if candles:
+                            source = adapter.exchange_name
+                            break  # first nonempty batch wins
                     except Exception as exc:
                         last_exc = exc
                         log.debug(
@@ -364,13 +393,25 @@ class IngestionPipeline:
                 m.fetch_count += 1
 
                 if candles:
+                    if self._buffer_sources.get(symbol) != source:
+                        self._buffers[symbol] = CandleRingBuffer(symbol)
+                    self._buffer_sources[symbol] = source
                     added = self._buffers[symbol].ingest(candles)
                     m.last_fetch_at = time.time()
+                    # Use the exact last batch for provenance, not the deduplicated ring.
+                    if source in CANDLE_SOURCES:
+                        self._observations[symbol] = CandleObservation(
+                            symbol, CANDLE_INTERVAL, source, int(m.last_fetch_at),
+                            tuple(candles[-RING_BUFFER_SIZE:]),
+                        )
+                    else:
+                        self._observations.pop(symbol, None)
                     log.debug(
                         "[ingestion] %s — %d candles ingested (+%d new) in %.0fms",
                         symbol, len(self._buffers[symbol]), added, latency_ms,
                     )
                 else:
+                    self._observations.pop(symbol, None)
                     m.error_count += 1
                     log.warning(
                         "[ingestion] %s — all adapters failed: %s",
@@ -378,6 +419,7 @@ class IngestionPipeline:
                     )
 
             except Exception as exc:
+                self._observations.pop(symbol, None)
                 self._metrics[symbol].error_count += 1
                 log.error("[ingestion] Unexpected error for %s: %s", symbol, exc)
 
@@ -404,6 +446,10 @@ def get_candles_from_buffer(symbol: str, n: Optional[int] = None) -> List[OhlcvC
     inside the signal engine.
     """
     return pipeline.get_candles(symbol, n)
+
+
+def get_candle_observation(symbol: str, n: int) -> Optional[CandleObservation]:
+    return pipeline.get_observation(symbol, n)
 
 
 def get_ingestion_metrics() -> Dict[str, dict]:

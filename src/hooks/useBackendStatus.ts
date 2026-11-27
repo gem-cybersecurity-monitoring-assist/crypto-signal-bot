@@ -66,19 +66,7 @@ export interface BackendExchangeStatus {
   source: string;
 }
 
-interface BalanceResponse {
-  balances?: Record<string, number>;
-  positions?: Record<string, number>;
-  balance_usdt?: number | string;
-  free?: number | string;
-  total?: number | string;
-}
-
 interface PortfolioSummaryResponse {
-  cash_balance?: number | string;
-  balance_usdt?: number | string;
-  cash_usdt?: number | string;
-  equity?: number | string;
   equity_usdt?: number | string;
 }
 
@@ -132,7 +120,7 @@ function normalizeHealth(raw: BackendHealth): NormalizedBackendHealth {
     halted: raw.halted ?? Boolean(triggered),
     guardian_triggered: raw.guardian_triggered ?? Boolean(triggered),
     market_data_mode: raw.market_data_mode ?? 'live_public_paper',
-    market_data_connected: raw.market_data_connected ?? true,
+    market_data_connected: raw.market_data_connected ?? false,
     market_data_source: raw.market_data_source ?? 'coinbase',
   };
 }
@@ -196,9 +184,8 @@ export function useBackendStatus(pollIntervalMs = 30000): UseBackendStatusResult
       exchangeStatusError: null,
     };
 
-    const [healthResult, balanceResult, configResult, exchangeResult, portfolioResult] = await Promise.allSettled([
+    const [healthResult, configResult, exchangeResult, portfolioResult] = await Promise.allSettled([
       fetchBackendJson<BackendHealth>(PAPER_DASHBOARD_ROUTES.health),
-      fetchBackendJson<BalanceResponse>(PAPER_DASHBOARD_ROUTES.portfolioBalance),
       fetchBackendJson<Record<string, unknown>>(PAPER_DASHBOARD_ROUTES.runtimeStatus),
       fetchBackendJson<Record<string, unknown>>(PAPER_DASHBOARD_ROUTES.exchangeStatus),
       fetchBackendJson<PortfolioSummaryResponse>(PAPER_DASHBOARD_ROUTES.portfolioSummary),
@@ -220,27 +207,16 @@ export function useBackendStatus(pollIntervalMs = 30000): UseBackendStatusResult
     }
 
     if (portfolioResult.status === 'fulfilled') {
-      const balance = firstNumber(
-        portfolioResult.value.cash_balance,
-        portfolioResult.value.balance_usdt,
-        portfolioResult.value.cash_usdt,
-        portfolioResult.value.equity,
-        portfolioResult.value.equity_usdt,
-      );
-      if (balance !== null) setPaperBalance(balance);
-    } else if (balanceResult.status === 'fulfilled') {
-      const rawUsdt = firstNumber(
-        balanceResult.value?.balances?.USDT,
-        balanceResult.value?.balance_usdt,
-        balanceResult.value?.free,
-        balanceResult.value?.total,
-      );
-      if (rawUsdt !== null) setPaperBalance(rawUsdt);
+      const equity = firstNumber(portfolioResult.value.equity_usdt);
+      setPaperBalance(equity);
+      if (equity === null) {
+        newErrors.balanceError = 'Worker portfolio summary did not report equity_usdt.';
+      }
     } else {
-      const balErr = balanceResult.reason instanceof Error
-        ? balanceResult.reason.message
-        : 'Failed to fetch balance';
-      newErrors.balanceError = balErr;
+      const valuationError = portfolioResult.reason instanceof Error
+        ? portfolioResult.reason.message
+        : 'Failed to fetch portfolio valuation';
+      newErrors.balanceError = valuationError;
     }
 
     if (configResult.status === 'fulfilled') {

@@ -1,4 +1,4 @@
-import { classifySequence } from './events'
+import { classifySequence, validateNormalizedEvent } from './events'
 import {
   DEFAULT_FAST_PATH_THRESHOLDS,
   type FastPathThresholds,
@@ -18,6 +18,8 @@ export class BinanceDepthRecovery {
   private state: RecoveryState = 'idle'
   private startedAtMs: number | null = null
   private lastSequence: number | null = null
+  private symbol: string | null = null
+  private failureCode: string | null = null
   private readonly buffer: NormalizedMarketEvent[] = []
 
   constructor(private readonly thresholds: FastPathThresholds = { ...DEFAULT_FAST_PATH_THRESHOLDS }) {}
@@ -26,6 +28,8 @@ export class BinanceDepthRecovery {
     this.state = 'loading_snapshot'
     this.startedAtMs = nowMs
     this.lastSequence = null
+    this.symbol = null
+    this.failureCode = null
     this.buffer.length = 0
   }
 
@@ -33,19 +37,41 @@ export class BinanceDepthRecovery {
     this.expireIfNeeded(nowMs)
     if (this.state === 'unavailable') return this.state
     if (this.state === 'idle') this.begin(nowMs)
+    if (this.state === 'healthy') return this.state
+    if (validateNormalizedEvent(event).length > 0 ||
+        event.source !== 'binance' || event.channel !== 'diff_depth' ||
+        event.kind !== 'level2' || !/^[A-Z0-9]+-[A-Z0-9]+$/.test(event.symbol) ||
+        event.sequenceStart === undefined || event.sequenceEnd === undefined ||
+        event.receivedTsMs > nowMs || event.exchangeTsMs > nowMs) {
+      return this.fail('INVALID_RECOVERY_EVENT')
+    }
+    if (this.symbol !== null && this.symbol !== event.symbol) {
+      return this.fail('RECOVERY_SYMBOL_MISMATCH')
+    }
+    this.symbol = event.symbol
+    if (this.buffer.length >= this.thresholds.maxBufferedEvents) {
+      return this.fail('RECOVERY_BUFFER_OVERFLOW')
+    }
     this.state = 'buffering'
-    this.buffer.push(event)
+    // Retain an independent copy so a caller cannot mutate buffered evidence.
+    this.buffer.push({ ...event, updates: event.updates?.map(update => ({ ...update })) })
     this.buffer.sort((a, b) => (a.sequenceStart ?? a.sequenceEnd ?? 0) - (b.sequenceStart ?? b.sequenceEnd ?? 0))
-    while (this.buffer.length > this.thresholds.maxBufferedEvents) this.buffer.shift()
     return this.state
   }
 
   applySnapshot(lastUpdateId: number, nowMs: number): RecoveryApplyResult {
     this.expireIfNeeded(nowMs)
     if (this.state === 'unavailable') {
-      return this.result([], [...this.buffer], 'RECOVERY_TIMEOUT')
+      return this.result([], [...this.buffer], this.failureCode ?? 'RECOVERY_UNAVAILABLE')
     }
 
+    if (this.state === 'idle' || this.state === 'healthy') {
+      return this.result([], [], 'RECOVERY_NOT_STARTED')
+    }
+    if (!Number.isSafeInteger(lastUpdateId) || lastUpdateId < 0) {
+      this.fail('INVALID_SNAPSHOT_SEQUENCE')
+      return this.result([], [...this.buffer], this.failureCode)
+    }
     this.state = 'bridging'
     const accepted: NormalizedMarketEvent[] = []
     const rejected: NormalizedMarketEvent[] = []
@@ -85,7 +111,8 @@ export class BinanceDepthRecovery {
       }
       this.state = 'resyncing'
       this.lastSequence = sequence
-      return this.result(accepted, rejected.concat(event), 'SEQUENCE_GAP')
+      // A partial bridge is diagnostic only. Never expose it as an applicable batch.
+      return this.result([], [...this.buffer], 'SEQUENCE_GAP')
     }
 
     if (!bridged) {
@@ -110,6 +137,8 @@ export class BinanceDepthRecovery {
     this.state = 'idle'
     this.startedAtMs = null
     this.lastSequence = null
+    this.symbol = null
+    this.failureCode = null
     this.buffer.length = 0
   }
 
@@ -128,7 +157,13 @@ export class BinanceDepthRecovery {
   private expireIfNeeded(nowMs: number): void {
     if (this.startedAtMs === null) return
     if (nowMs - this.startedAtMs <= this.thresholds.recoveryTimeoutMs) return
+    if (this.state !== 'unavailable') this.fail('RECOVERY_TIMEOUT')
+  }
+
+  private fail(code: string): RecoveryState {
     this.state = 'unavailable'
+    this.failureCode = code
+    return this.state
   }
 
   private result(

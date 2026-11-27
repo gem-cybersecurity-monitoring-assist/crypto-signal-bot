@@ -258,10 +258,31 @@ class TradeRecord(Base):
     side        = Column(String(8), nullable=False)
     realized_pnl = Column(Float, nullable=True)               # set on SELL fills
     executed_at = Column(BigInteger, default=unix_timestamp, index=True)
+    # Exact-decimal ledger evidence written atomically with the fill. Rows
+    # lacking these (legacy) are ambiguous and block paper portfolio startup.
+    fill_key    = Column(String(128), nullable=True)      # "fill:<order_id>"
+    qty_text    = Column(String(64), nullable=True)
+    price_text  = Column(String(64), nullable=True)
+    fee_text    = Column(String(64), nullable=True)
+    realized_pnl_text = Column(String(64), nullable=True)
+    cash_after_text   = Column(String(64), nullable=True)
 
     __table_args__ = (
         Index("ix_trades_account_symbol", "account_id", "symbol"),
+        # Atomic duplicate-fill rejection; NULL legacy keys do not collide.
+        Index("ux_trades_account_fill_key", "account_id", "fill_key", unique=True),
     )
+
+
+class PaperAccountStateRecord(Base):
+    """Authoritative paper cash/peak/counter, committed with every fill."""
+    __tablename__ = "paper_account_state"
+
+    account_id       = Column(String(64), primary_key=True)
+    cash_text        = Column(String(64), nullable=False)
+    peak_equity_text = Column(String(64), nullable=False)
+    trade_counter    = Column(Integer, nullable=False, default=0)
+    updated_at       = Column(BigInteger, default=unix_timestamp)
 
 
 class PositionRecord2(Base):
@@ -315,6 +336,7 @@ __all__ = [
     "SignalRecord",
     "AccountRecord",
     "PaperOrderRecord",
+    "PaperAccountStateRecord",
     "TradeRecord",
     "PositionRecord2",
     "EquitySnapshotRecord",

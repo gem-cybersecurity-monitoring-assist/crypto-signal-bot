@@ -7,6 +7,8 @@ export interface V2GuardianSnapshot {
   reason: string | null
   drawdownPct: number
   maxDrawdownPct: number
+  stateUpdatedAt?: string | null
+  rowStatus?: 'recorded' | 'unavailable' | 'invalid_timestamp'
 }
 
 export interface V2InfrastructureInput {
@@ -39,6 +41,11 @@ export function buildV2InfrastructureStatus(input: V2InfrastructureInput) {
       reason: input.guardian.reason,
       drawdown_pct: input.guardian.drawdownPct,
       max_drawdown_pct: input.guardian.maxDrawdownPct,
+      state_source: 'legacy_d1_global_flag' as const,
+      row_status: input.guardian.rowStatus ?? 'not_reported',
+      state_updated_at: input.guardian.stateUpdatedAt ?? null,
+      risk_cycle_verified: false,
+      shared_clearance_verified: false,
     },
     fast_path: {
       authority: 'legacy_d1' as const,
