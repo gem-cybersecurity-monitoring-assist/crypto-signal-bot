@@ -49,6 +49,11 @@ export async function persistCompletedOrder(
     || !order.raw_response_hash || !/^[a-f0-9]{64}$/.test(order.raw_response_hash)) {
     return conflict('persisted terminal observation and audit reference are required')
   }
+  if (!await env.DB.prepare(`SELECT 1 FROM immutable_audit_events WHERE event_hash = ?
+    AND exchange_account_id = ? AND resource_type = 'ORDER' AND resource_id = ?`)
+    .bind(terminal.audit_event_hash, exchangeAccountId, internalOrderId).first()) {
+    return conflict('terminal audit reference does not resolve to this order')
+  }
   const reservations = (await env.DB.prepare(`SELECT reservation_id, status, version FROM reservations
     WHERE order_id = ? AND exchange_account_id = ?`).bind(internalOrderId, exchangeAccountId)
     .all<{ reservation_id: string; status: string; version: number }>()).results

@@ -51,6 +51,7 @@ jobs:
 
     steps:
       - name: Require protected main and explicit owner read-only acknowledgement
+        working-directory: ${{ github.workspace }}
         env:
           ACK: ${{ inputs.acknowledge_read_only }}
         run: |

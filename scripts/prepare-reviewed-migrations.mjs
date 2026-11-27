@@ -6,10 +6,10 @@ export function reviewedMigrationNames(names) {
   const result = names.filter((name) => {
     const match=/^(\d{3})_.*\.sql$/.exec(name);
     if(!match)return false;
-    const n=Number(match[1]);return n>=3 && n<=30 || n===33 || n===34;
+    const n=Number(match[1]);return n>=3 && n<=30 || n===33 || n===34 || n===35;
   }).sort();
-  if(result.length!==31 || result[0]!=='003_live_release_authorizations.sql'
-    || result.at(-1)!=='034_live_partial_fill_reservation_release.sql') throw new Error('REVIEWED_MIGRATION_SET_INCOMPLETE');
+  if(result.length!==32 || result[0]!=='003_live_release_authorizations.sql'
+    || result.at(-1)!=='035_live_recovery_task_membership.sql') throw new Error('REVIEWED_MIGRATION_SET_INCOMPLETE');
   return result;
 }
 export function reviewedMigrationFiles(names) {

@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
+import { evaluateAndPersistBitgetAttestedRecoveryReadiness } from '../src/live/bitget-attested-recovery-readiness.ts'
 import { canonicalHash } from '../src/live/canonical-json.ts'
 import { discoverScheduledRecovery } from '../src/live/scheduled-recovery-discovery.ts'
 import { consumeScheduledRecoveryReads } from '../src/live/scheduled-recovery-read.ts'
@@ -11,7 +12,7 @@ async function fixture() {
   const db = new DatabaseSync(':memory:')
   db.exec('PRAGMA foreign_keys = ON')
   for (const name of ['007_live_exchange_projections.sql', '009_live_queue_delivery.sql',
-    '017_live_recovery_ingestion.sql', '021_live_bitget_read_only_certification.sql',
+    '017_live_recovery_ingestion.sql', '035_live_recovery_task_membership.sql', '021_live_bitget_read_only_certification.sql',
     '022_live_bitget_read_only_certification_attestation.sql', '023_live_bitget_attested_recovery_ingestion.sql']) {
     db.exec(readFileSync(new URL(`../migrations/${name}`, import.meta.url), 'utf8'))
   }
@@ -249,4 +250,30 @@ test('a hash-valid stale external attestation cannot authorize provider reads', 
   assert.equal(f.calls.length, 0)
   assert.equal(f.count('live_recovery_ingestions'), 0)
   f.db.close()
+})
+
+test('a later discovery rereads a partially filled order and shares its accounting intent', async () => {
+  const f = await fixture()
+  try {
+    assert.equal((await consumeScheduledRecoveryReads(f.env, f.now, { fetcher: f.fetcher })).completed, 1)
+    const next = f.now + 300_000
+    assert.equal((await discoverScheduledRecovery(f.env, next)).registered, 1)
+    assert.equal((await discoverScheduledRecovery(f.env, next)).registered, 0)
+    assert.equal((await consumeScheduledRecoveryReads(f.env, next, { fetcher: f.fetcher })).completed, 1)
+    assert.equal(f.count('live_recovery_ingestions'), 2)
+    assert.equal(f.count('live_recovery_accounting_task_intents'), 1)
+    const root = new URL('../migrations/', import.meta.url)
+    for (const file of readdirSync(root).filter(name => /^(00[3-9]|01\d|02[0-4])_.*\.sql$/.test(name)).sort()) {
+      f.db.exec(readFileSync(new URL(file, root), 'utf8'))
+    }
+    const bindings = f.db.prepare('SELECT binding_id FROM live_bitget_attested_recovery_ingestions').all()
+    assert.equal(bindings.length, 2)
+    for (const [index, binding] of bindings.entries()) {
+      const evidence = await evaluateAndPersistBitgetAttestedRecoveryReadiness(f.env, {
+        checkpointId: `checkpoint-${index}`, bindingId: String(binding.binding_id), evaluatedAt: new Date(next).toISOString(),
+      })
+      assert.equal(evidence.accountingTaskCount, 1)
+      assert.equal(evidence.status, 'PENDING_ACCOUNTING_REVIEW')
+    }
+  } finally { f.db.close() }
 })

@@ -1,3 +1,4 @@
+import { appendAuditEvent } from '../src/live/audit-chain.ts'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import test from 'node:test'
@@ -116,10 +117,14 @@ async function prepared(options: { type?: string; age?: number; audience?: strin
     decision: evaluateAuthorization(request), correlationId: 'completion-review', auditEventHash: 'c'.repeat(64) })
   db.sql.prepare(`UPDATE live_orders SET state='CANCELLED',filled_base_quantity='0',filled_quote_value='0',
     raw_response_hash=? WHERE internal_order_id='buy-order'`).run('b'.repeat(64))
+  const audit = await appendAuditEvent(db.env(), { eventId: 'terminal-audit', exchangeAccountId: ACCOUNT,
+    actorId: null, actorRole: 'system', action: 'TERMINAL_OBSERVED', resourceType: 'ORDER', resourceId: 'buy-order',
+    correlationId: 'terminal-buy', idempotencyKey: null, configurationVersion: 'test', releaseId: null,
+    outcome: 'OBSERVED', before: null, after: null, occurredAt: '2026-10-04T01:01:00.000Z' })
   db.sql.prepare(`INSERT INTO live_order_events (event_id,internal_order_id,previous_state,next_state,source,
     source_event_id,correlation_id,configuration_version,payload_hash,audit_event_hash,occurred_at)
     VALUES ('terminal-buy','buy-order','RECOVERY_REQUIRED','CANCELLED','exchange-rest','rest-buy',
-    'terminal-buy','test',?,?,?)`).run('b'.repeat(64),'c'.repeat(64),issuedAt)
+    'terminal-buy','test',?,?,?)`).run('b'.repeat(64),audit.eventHash,issuedAt)
   db.sql.prepare(`INSERT INTO reservations (reservation_id,exchange_account_id,order_id,asset,amount)
     VALUES ('reservation-buy',?,'buy-order','USDT','550')`).run(ACCOUNT)
   const reserve = buildReservationJournal({ journalId:'reserve-buy',exchangeAccountId:ACCOUNT,orderId:'buy-order',
@@ -586,4 +591,20 @@ test('private ingress bounds streams and the deployment imports one existing coo
     assert.match(config,/script_name\s*=\s*"crypto-signal-bot-live-candidate"/)
     assert.doesNotMatch(config,/new_sqlite_classes|\[\[migrations\]\]|^routes\s*=|^crons\s*=/m)
   }finally{db.sql.close()}
+})
+
+test('interrupted zero and partial releases reject reversal of the original reserve on retry', async () => {
+  for (const fixture of [prepared, partialPrepared]) {
+    const { db, coordinator } = await fixture()
+    try {
+      db.sql.exec(`CREATE TRIGGER fail_completion BEFORE INSERT ON live_order_events WHEN NEW.next_state='SETTLED'
+        BEGIN SELECT RAISE(ABORT,'injected event outage'); END`)
+      assert.equal((await coordinator.fetch(request())).status, 500)
+      const journals = db.count('ledger_journals')
+      db.sql.exec("DROP TRIGGER fail_completion; UPDATE ledger_journals SET status='REVERSED' WHERE event_type='FUNDS_RESERVED'")
+      assert.equal((await coordinator.fetch(request())).status, 409)
+      assert.equal(db.count('ledger_journals'), journals)
+      assert.equal(db.sql.prepare("SELECT settled FROM live_orders WHERE internal_order_id='buy-order'").get()!.settled, 0)
+    } finally { db.sql.close() }
+  }
 })

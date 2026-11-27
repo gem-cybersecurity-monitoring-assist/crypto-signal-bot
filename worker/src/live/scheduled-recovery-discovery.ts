@@ -11,8 +11,8 @@ export interface ScheduledRecoveryDiscoveryEnv {
 
 /**
  * Bounded restart discovery, using the existing D1 queue contract. This queues
- * GET-only lookup plans, never financial commands. An unchanged persisted
- * candidate has the same event/hash across cron redelivery and Worker restarts.
+ * GET-only lookup plans, never financial commands. A candidate and its completed
+ * predecessor identify one attempt across cron redelivery and Worker restarts.
  * Provider reads, attestation and accounting remain separate verified stages.
  */
 export async function discoverScheduledRecovery(
@@ -59,8 +59,10 @@ export async function discoverScheduledRecovery(
     })
     for (const candidate of candidates) {
       if (candidate.exchangeAccountId !== accountId) throw new TypeError('recovery candidate account mismatch')
-      const plan = planRecoveryLookup(candidate)
-      const payload = { version: '1', kind: 'RECOVERY_DISCOVERY', exchangeName: 'BITGET', plan }
+      const { previousDiscoveryId, ...order } = candidate
+      const plan = planRecoveryLookup(order)
+      const payload = { version: '1', kind: 'RECOVERY_DISCOVERY', exchangeName: 'BITGET', plan,
+        ...(previousDiscoveryId ? { previousDiscoveryId } : {}) }
       const eventId = `recovery-discovery:${await canonicalHash(payload)}`
       const delivery = await registerQueueDelivery(env, {
         eventId,

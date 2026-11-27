@@ -1,23 +1,18 @@
+import { privateToml } from '../worker/scripts/private-toml.mjs';
 import fs from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { certificationStoreConfig, inspectCertificationStore } from './verify-bitget-secret-store-resources.mjs';
 
 /** Fail before a deployment if this inspection-only service gains public or financial bindings. */
 export function privateCertificationConfig(text) {
-  const fields = [
-    ['name','"crypto-signal-bot-provider-certification"'],
-    ['main','"worker/src/index_provider_certification.ts"'],
-    ['workers_dev','false'], ['preview_urls','false'],
-    ['ALLOW_MAINNET','"false"'], ['LIVE_EXECUTION_ENABLED','"false"'], ['WITHDRAWALS_ENABLED','"false"'],
-  ];
-  for (const [name, expected] of fields) {
-    const matches = [...text.matchAll(new RegExp(`^${name}\\s*=\\s*([^\\r\\n#]+)(?:#.*)?$`,'gm'))];
-    if (matches.length !== 1 || matches[0][1].trim() !== expected) throw new Error('PRIVATE_CERTIFICATION_CONFIG_INVALID');
-  }
-  // Strip comments before checking assignment/table names, not credential values.
-  const active = text.replace(/^\s*#.*$/gm,'');
-  if (/^\s*routes?\s*=|^\s*\[+\s*(?:routes?|triggers|env|d1_databases|kv_namespaces|r2_buckets|durable_objects|services|queues)\b/m.test(active)
-    || /BITGET_TRADE_|BITGET_WITHDRAW|^\s*CERTIFICATION_RUNNER_TOKEN\s*=/m.test(active)) {
+  const config = privateToml(text, ['route', 'routes', 'triggers', 'env', 'd1_databases',
+    'kv_namespaces', 'r2_buckets', 'durable_objects', 'services', 'queues', 'CERTIFICATION_RUNNER_TOKEN']);
+  if (!config || config.name !== 'crypto-signal-bot-provider-certification'
+    || config.main !== 'worker/src/index_provider_certification.ts'
+    || config.workers_dev !== false || config.preview_urls !== false
+    || ['ALLOW_MAINNET', 'LIVE_EXECUTION_ENABLED', 'WITHDRAWALS_ENABLED'].some(k => config.vars?.[k] !== 'false')
+    || Object.hasOwn(config.vars, 'CERTIFICATION_RUNNER_TOKEN')
+    || /BITGET_TRADE_|BITGET_WITHDRAW/.test(JSON.stringify(config))) {
     throw new Error('PRIVATE_CERTIFICATION_CONFIG_INVALID');
   }
   return certificationStoreConfig(text);

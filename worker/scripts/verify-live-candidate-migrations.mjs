@@ -11,15 +11,15 @@ const migrations = fs.readdirSync(migrationsRoot)
     const match = /^(\d{3})_.*\.sql$/.exec(name)
     if (!match) return false
     const sequence = Number(match[1])
-    return sequence >= 3 && (sequence <= 30 || (sequence === 33 || sequence === 34))
+    return sequence >= 3 && (sequence <= 30 || (sequence === 33 || sequence === 34 || sequence === 35))
   })
   .sort()
 
 if (migrations[0] !== '003_live_release_authorizations.sql') {
   throw new Error('live-candidate migration sequence must start at 003')
 }
-if (migrations.at(-1) !== '034_live_partial_fill_reservation_release.sql') {
-  throw new Error('live-candidate migration sequence must end at 034')
+if (migrations.at(-1) !== '035_live_recovery_task_membership.sql') {
+  throw new Error('live-candidate migration sequence must end at 035')
 }
 for (const required of [
   '020_live_recovery_accounting_dispatch_attempts.sql',
@@ -264,12 +264,12 @@ try {
 const upgradeDatabase = database()
 try {
   apply(upgradeDatabase, baselineMigrations, 'upgrade baseline through migration 019')
-  apply(upgradeDatabase, upgradeMigrations, 'upgrade from migration 019 through migration 034')
-  apply(upgradeDatabase, upgradeMigrations, 'idempotent replay of migrations 020 through 034')
+  apply(upgradeDatabase, upgradeMigrations, 'upgrade from migration 019 through migration 035')
+  apply(upgradeDatabase, upgradeMigrations, 'idempotent replay of migrations 020 through 035')
 } finally {
   upgradeDatabase.close()
 }
 
 console.log(
-  `Live-candidate empty and upgrade paths verified (${migrations.length} files; migrations 020-030 and 033-034 replayed; 031-032 belong to production paper management).`,
+  `Live-candidate empty and upgrade paths verified (${migrations.length} files; migrations 020-030 and 033-035 replayed; 031-032 belong to production paper management).`,
 )

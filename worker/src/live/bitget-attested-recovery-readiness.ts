@@ -349,10 +349,11 @@ async function loadTaskEvidence(
            s.provider_mutation_allowed AS settlement_provider_mutation_allowed,
            s.execution_allowed AS settlement_execution_allowed
       FROM live_recovery_accounting_task_intents t
+      JOIN live_recovery_task_memberships m ON m.task_intent_id = t.task_intent_id
       LEFT JOIN live_fills f ON f.fill_id = t.fill_id
       LEFT JOIN live_fill_accounting_receipts a ON a.fill_id = t.fill_id
       LEFT JOIN live_reservation_settlement_receipts s ON s.fill_id = t.fill_id
-     WHERE t.ingestion_id = ?
+     WHERE m.ingestion_id = ?
      ORDER BY t.sequence_timestamp ASC, t.fill_id ASC
   `).bind(ingestionId).all<TaskEvidenceRow>()
   return Object.freeze([...(result.results ?? [])])

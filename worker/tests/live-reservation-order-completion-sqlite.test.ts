@@ -1,3 +1,4 @@
+import { appendAuditEvent } from '../src/live/audit-chain.ts'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import test from 'node:test'
@@ -101,10 +102,14 @@ async function prepared() {
   const accounted = await persistSpotFillAccountingVerified(db.env(), input)
   db.sql.prepare(`UPDATE live_orders SET state='FILLED',filled_base_quantity='0.01',
     filled_quote_value='500',raw_response_hash=? WHERE internal_order_id='buy-order'`).run('b'.repeat(64))
+  const audit = await appendAuditEvent(db.env(), { eventId: 'terminal-audit', exchangeAccountId: ACCOUNT,
+    actorId: null, actorRole: 'system', action: 'TERMINAL_OBSERVED', resourceType: 'ORDER', resourceId: 'buy-order',
+    correlationId: 'terminal-buy', idempotencyKey: null, configurationVersion: 'test', releaseId: null,
+    outcome: 'OBSERVED', before: null, after: null, occurredAt: '2026-10-04T01:01:00.000Z' })
   db.sql.prepare(`INSERT INTO live_order_events (event_id,internal_order_id,previous_state,next_state,
     source,source_event_id,correlation_id,configuration_version,payload_hash,audit_event_hash,occurred_at)
     VALUES ('terminal-buy','buy-order','RECOVERY_REQUIRED','FILLED','exchange-rest','rest-buy',
-    'terminal-buy','test',?,?,?)`).run('b'.repeat(64),'c'.repeat(64),'2026-10-04T01:01:00.000Z')
+    'terminal-buy','test',?,?,?)`).run('b'.repeat(64),audit.eventHash,'2026-10-04T01:01:00.000Z')
   return { db, accounted }
 }
 
@@ -228,5 +233,15 @@ test('order drift between proof loading and commit produces neither a completion
     await assert.rejects(persistCompletedOrder(db.env(), ACCOUNT, 'buy-order'))
     assert.equal(db.count('live_order_events'), 1)
     assert.equal(db.sql.prepare(`SELECT settled FROM live_orders WHERE internal_order_id='buy-order'`).get()!.settled, 0)
+  } finally { db.sql.close() }
+})
+
+test('a well-formed but unresolved terminal audit hash blocks settlement', async () => {
+  const { db, accounted } = await prepared()
+  try {
+    await persistReservationSettlement(db.env(), settlement(accounted.accountingHash))
+    db.sql.prepare("UPDATE live_order_events SET audit_event_hash=? WHERE event_id='terminal-buy'").run('e'.repeat(64))
+    await assert.rejects(persistCompletedOrder(db.env(), ACCOUNT, 'buy-order'), /audit reference/)
+    assert.equal(db.count('live_order_events'), 1)
   } finally { db.sql.close() }
 })

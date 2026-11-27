@@ -115,7 +115,8 @@ test('private certification artifact has no public exposure, trade/store persist
 test('deployment preflight rejects public exposure, financial bindings and inline invocation token',()=>{
   const config=readFileSync(new URL('../../wrangler.provider-certification.toml',import.meta.url),'utf8')
   assert.match(privateCertificationConfig(config).storeId,/^[a-f0-9]{32}$/)
-  for(const changed of [config.replace('workers_dev = false','workers_dev = true'),
+  for(const changed of ['"routes" = [{pattern="example.test"}]\n'+config, config+'\n[["services"]]\nbinding="backend"\n',
+    config.replace('workers_dev = false','workers_dev = true'),
     config.replace('LIVE_EXECUTION_ENABLED = "false"','LIVE_EXECUTION_ENABLED = "true"'),
     config+'\n[[routes]]\npattern = "example.test/*"\n',config+'\n[triggers]\ncrons = ["* * * * *"]\n',
     config+'\n[[services]]\nbinding = "FINANCIAL"\n',config.replace('[vars]','[vars]\nCERTIFICATION_RUNNER_TOKEN = "unsafe"'),

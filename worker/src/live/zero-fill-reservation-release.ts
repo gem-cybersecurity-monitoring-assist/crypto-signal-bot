@@ -1,5 +1,6 @@
+import { hasReservationBacking } from './reservation-backing.ts'
 import { canonicalHash } from './canonical-json.ts'
-import { asDecimalString, assertPositiveDecimal, compareDecimal, sumDecimals } from './decimal.ts'
+import { asDecimalString, assertPositiveDecimal } from './decimal.ts'
 import { buildReservationReleaseJournal } from './ledger.ts'
 import { OrderCompletionConflictError } from './order-completion-store.ts'
 
@@ -74,6 +75,8 @@ export async function releaseZeroFillReservations(
           || e.ledger_asset !== r.asset || e.amount !== r.amount)
         || !((debit.account_type === 'CASH_AVAILABLE' && credit.account_type === 'CASH_RESERVED')
           || (debit.account_type === 'INVENTORY_AVAILABLE' && credit.account_type === 'INVENTORY_RESERVED'))) return conflict()
+      if (!await hasReservationBacking(env, accountId, orderId, r.asset, asDecimalString(r.amount),
+        credit.ledger_account_id, debit.ledger_account_id)) return conflict()
       const expected = buildReservationReleaseJournal({ journalId, exchangeAccountId: accountId,
         orderId, correlationId: existing.authorization_event_id, idempotencyKey: releaseId,
         asset: r.asset, amount: asDecimalString(r.amount),
@@ -100,19 +103,8 @@ export async function releaseZeroFillReservations(
     const reserved = cash ?? ledgers.find((l) => l.account_type === 'INVENTORY_RESERVED')
     const available = ledgers.find((l) => l.account_type === (cash ? 'CASH_AVAILABLE' : 'INVENTORY_AVAILABLE'))
     if (!reserved || !available || (cash && ledgers.some((l) => l.account_type === 'INVENTORY_RESERVED'))) return conflict()
-    const backing = (await env.DB.prepare(`SELECT e.amount, e.direction, e.ledger_account_id,
-      a.exchange_account_id, a.asset, a.account_type FROM ledger_entries e
-      JOIN ledger_journals j ON j.journal_id=e.journal_id
-      JOIN ledger_accounts a ON a.ledger_account_id=e.ledger_account_id
-      WHERE j.exchange_account_id=? AND j.reference_type='ORDER' AND j.reference_id=?
-        AND j.event_type='FUNDS_RESERVED' AND j.status='POSTED' AND e.asset=? LIMIT 101`)
-      .bind(accountId, orderId, r.asset).all<{ amount: string; direction: string; ledger_account_id: string;
-        exchange_account_id: string; asset: string; account_type: string }>()).results
-    if (!backing.length || backing.length > 100 || backing.some((e) => e.exchange_account_id !== accountId
-      || e.asset !== r.asset || !((e.direction === 'DEBIT' && e.ledger_account_id === reserved.ledger_account_id)
-        || (e.direction === 'CREDIT' && e.ledger_account_id === available.ledger_account_id)))
-      || compareDecimal(sumDecimals(backing.filter((e) => e.direction === 'DEBIT').map((e) => asDecimalString(e.amount))), amount) !== 0
-      || compareDecimal(sumDecimals(backing.filter((e) => e.direction === 'CREDIT').map((e) => asDecimalString(e.amount))), amount) !== 0) return conflict()
+    if (!await hasReservationBacking(env, accountId, orderId, r.asset, amount,
+      reserved.ledger_account_id, available.ledger_account_id)) return conflict()
     const journal = buildReservationReleaseJournal({ journalId, exchangeAccountId: accountId,
       orderId, correlationId: authorizationEventId, idempotencyKey: releaseId, asset: r.asset, amount,
       availableAccountId: available.ledger_account_id, reservedAccountId: reserved.ledger_account_id })

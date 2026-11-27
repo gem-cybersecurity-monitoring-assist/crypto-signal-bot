@@ -153,9 +153,9 @@ test('isolated migration preparation excludes production paths and verifies empt
   const {DatabaseSync}=await import('node:sqlite')
   const directory=new URL('../migrations/',import.meta.url)
   const names=reviewedMigrationNames(fs.readdirSync(directory))
-  assert.equal(names.length,31)
+  assert.equal(names.length,32)
   const files=reviewedMigrationFiles(names)
-  assert.equal(new Set(files.map((f)=>f.target.split('_')[0])).size,31)
+  assert.equal(new Set(files.map((f)=>f.target.split('_')[0])).size,32)
   assert.ok(files.findIndex((f)=>f.source==='018_live_recovery_accounting_approval.sql')<files.findIndex((f)=>f.source==='018_live_recovery_accounting_dispatch.sql'))
   assert.ok(names.every((n)=>!/^00[12]_|^031_|^032_/.test(n)))
   assert.throws(()=>reviewedMigrationNames(names.filter((n)=>!n.startsWith('034_'))),/INCOMPLETE/)
@@ -169,7 +169,7 @@ test('isolated migration preparation excludes production paths and verifies empt
         db.prepare('INSERT INTO d1_migrations VALUES (?)').run(file.target);db.exec('COMMIT')
       }catch(error){db.exec('ROLLBACK');throw error}
     }
-    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM d1_migrations').get()!.n,31)
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM d1_migrations').get()!.n,32)
     assert.deepEqual(db.prepare('SELECT name FROM d1_migrations ORDER BY name').all().map(r=>r.name),files.map(f=>f.target).sort())
     assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE name='live_partial_fill_reservation_releases'").get())
     assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name='managed_users'").get(),undefined)
@@ -224,6 +224,10 @@ test('privacy checks reject route table, singular route, trigger and alternate e
   const candidate=fs.readFileSync(new URL('../../wrangler.live-candidate.toml',import.meta.url),'utf8')
   const coordinator=fs.readFileSync(new URL('../../wrangler.reviewed-coordinator.toml',import.meta.url),'utf8')
   const gateway=fs.readFileSync(new URL('../../wrangler.reviewed-operations.toml',import.meta.url),'utf8')
+  for (const prefix of ['"routes" = [{pattern="example.test", custom_domain=true}]\n', "['env'.preview]\n"]) {
+    assert.equal(reviewedResourceConfig(candidate,prefix+gateway).gatewayPrivate,false)
+    assert.equal(reviewedCoordinatorConfig(prefix+coordinator,gateway).gatewayPrivate,false)
+  }
   for(const suffix of ['\n[[routes]]\npattern="example.test"\ncustom_domain=true\n',
     '\nroute="example.test/*"\n','\n[triggers]\ncrons=["* * * * *"]\n','\n[env.preview]\nworkers_dev=true\n']){
     assert.equal(reviewedResourceConfig(candidate,gateway+suffix).gatewayPrivate,false)

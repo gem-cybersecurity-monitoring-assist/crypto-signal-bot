@@ -77,7 +77,8 @@ export async function consumeScheduledRecoveryReads(
     ORDER BY received_at, event_id LIMIT 5`).bind(accountId, now).all<Work>()
   const result = { status: 'CONSUMED' as const, completed: 0, failed: 0 }
   for (const row of work.results ?? []) {
-    if (!await claimQueueDelivery(env, row.event_id, now, 3)) continue
+    const claimedAt = new Date().toISOString()
+    if (!await claimQueueDelivery(env, row.event_id, claimedAt, 3)) continue
     try {
       const payload = JSON.parse(row.payload_json)
       if (payload.version !== '1' || payload.kind !== 'RECOVERY_DISCOVERY' || payload.exchangeName !== 'BITGET'
@@ -132,19 +133,19 @@ export async function consumeScheduledRecoveryReads(
         attestationId, recoveredAt: observedAt, linkedAt: observedAt,
       })
       const notification = await registerQueueDelivery(env, {
-        eventId: `recovery-decision:${await canonicalHash({ evidenceKey, internalOrderId: order.internal_order_id })}`,
+        eventId: `recovery-decision:${await canonicalHash({ evidenceKey, discoveryEventId: row.event_id, internalOrderId: order.internal_order_id })}`,
         messageType: 'NOTIFY_ALERT', exchangeAccountId: accountId, correlationId: order.internal_order_id,
-        payload: { kind: 'RECOVERY_RECONCILIATION_DECISION', bindingId: cycle.persistence.bindingId,
+        payload: { kind: 'RECOVERY_RECONCILIATION_DECISION', discoveryEventId: row.event_id, bindingId: cycle.persistence.bindingId,
           snapshotHash: recovery.snapshotHash, decision: cycle.reconciliation.decision,
           providerMutationAllowed: false, automaticStateProjectionAllowed: false, automaticAccountingDispatchAllowed: false },
         receivedAt: observedAt, availableAt: observedAt,
       })
       if (notification.state === 'CONFLICT') throw new TypeError('recovery decision evidence conflict')
-      if (await completeQueueDelivery(env, row.event_id, new Date().toISOString(), now)) result.completed += 1
+      if (await completeQueueDelivery(env, row.event_id, new Date().toISOString(), claimedAt)) result.completed += 1
     } catch {
       // Provider text/credentials never enter queue error detail or logs.
       if (await failQueueDelivery(env, { eventId: row.event_id, errorCode: 'RECOVERY_READ_REVIEW_REQUIRED',
-        retryAt: new Date(nowMs + 60_000).toISOString(), expectedStartedAt: now })) result.failed += 1
+        retryAt: new Date(nowMs + 60_000).toISOString(), expectedStartedAt: claimedAt })) result.failed += 1
     }
   }
   return result

@@ -1,3 +1,4 @@
+import { privateToml } from '../worker/scripts/private-toml.mjs';
 import fs from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { verifyWorkerDeploymentTarget } from './verify-worker-deployment-target.mjs';
@@ -14,7 +15,8 @@ const fail = (code) => { throw new Error(code); };
 // The checked-in private templates deliberately allow only simple TOML.
 // Route/trigger table forms are not private service bindings.
 function noPublicRouteDeclarations(text) {
-  return !/^\s*(?:routes|route|crons)\s*=/m.test(text)
+  const config = privateToml(text, ['routes', 'route', 'crons', 'triggers', 'env']);
+  return config?.workers_dev === false && config.preview_urls === false && !/^\s*(?:routes|route|crons)\s*=/m.test(text)
     && !/^\s*\[+\s*(?:routes?|triggers)(?:\b|\])/m.test(text)
     && !/^\s*\[+\s*env(?:\b|\])/m.test(text);
 }
