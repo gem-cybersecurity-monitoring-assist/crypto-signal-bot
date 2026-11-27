@@ -4,4 +4,3 @@
 export const PAPER_BALANCE_SEED_SQL = `INSERT INTO portfolio (symbol, side, quantity, entry_price, current_price, pnl, status)
     SELECT 'USDT', 'balance', 10000, 1.0, 1.0, 0, 'balance'
     WHERE NOT EXISTS (SELECT 1 FROM portfolio WHERE symbol = 'USDT' AND status = 'balance')`
-

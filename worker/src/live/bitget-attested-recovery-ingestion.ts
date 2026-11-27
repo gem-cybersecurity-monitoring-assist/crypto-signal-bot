@@ -522,6 +522,21 @@ function result(
   return Object.freeze({ persistenceStatus, ingestionPersistenceStatus, ...evidence })
 }
 
+/** Validate the existing immutable certification package before external reads. */
+export async function assertExternalRecoveryAttestation(
+  env: BitgetAttestedRecoveryIngestionEnv,
+  input: { attestationId: string; exchangeAccountId: string; productId: string; now: string },
+): Promise<void> {
+  const row = await loadAttestationPackage(env, required(input.attestationId, 'attestationId'))
+  await assertAttestationPackage(row, await loadCertificationChecks(env, row.certification_run_id))
+  const age = Date.parse(isoTimestamp(input.now, 'now')) - Date.parse(row.attested_at)
+  if (row.source_mode !== 'ISOLATED_READ_ONLY_CLIENT' || row.external_read_only_evidence !== 1
+    || row.run_exchange_account_id !== input.exchangeAccountId || row.run_product_id !== input.productId
+    || age < 0 || age > 86_400_000) {
+    throw new BitgetAttestedRecoveryIngestionConflictError('fresh external certification must match recovery account and product')
+  }
+}
+
 export async function persistAttestedBitgetRecoveryIngestion(
   env: BitgetAttestedRecoveryIngestionEnv,
   input: BitgetAttestedRecoveryIngestionInput,
@@ -570,6 +585,27 @@ export async function persistAttestedBitgetRecoveryIngestion(
   const existing = await loadBinding(env, bindingId, attestationId, input.plan.ingestionId)
   if (existing) {
     assertBindingCompatible(existing, evidence, linkedAt)
+    // Migration 035 can recover creator links only. The original plan has now
+    // been rehashed and matched to the immutable binding; use its exact tasks.
+    const memberships = await env.DB.prepare(`SELECT task_intent_id FROM live_recovery_task_memberships
+      WHERE ingestion_id = ?`).bind(input.plan.ingestionId).all<{ task_intent_id: string }>()
+    const present = new Set(memberships.results.map(row => row.task_intent_id))
+    const tasks = input.plan.accountingTaskIntents
+    const missing = tasks.filter(task => !present.has(task.taskIntentId))
+    if (present.size + missing.length !== tasks.length) {
+      throw new BitgetAttestedRecoveryIngestionConflictError('unexpected membership outside attested plan')
+    }
+    if (missing.length) {
+      // A missing or mismatched intent produces NULL and aborts the entire
+      // batch via NOT NULL. Concurrent identical repairs are idempotent.
+      await env.DB.batch(missing.map(task => env.DB.prepare(`INSERT INTO live_recovery_task_memberships
+        (ingestion_id, task_intent_id) VALUES (?, (SELECT task_intent_id FROM live_recovery_accounting_task_intents
+          WHERE task_intent_id = ? AND provider = 'BITGET' AND exchange_account_id = ? AND product_id = ?
+          AND fill_id = ? AND fill_hash = ? AND sequence_timestamp = ?))
+        ON CONFLICT(ingestion_id, task_intent_id) DO NOTHING`)
+        .bind(input.plan.ingestionId, task.taskIntentId, input.plan.exchangeAccountId, input.plan.productId,
+          task.fillId, task.fillHash, task.sequenceTimestamp)))
+    }
     return result('REPLAYED', 'REPLAYED', evidence)
   }
 

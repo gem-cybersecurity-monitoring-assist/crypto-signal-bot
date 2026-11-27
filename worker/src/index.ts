@@ -16,7 +16,7 @@
 
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
-import { buildSignalFreshnessMetadata } from './signals/freshness'
+import { buildSignalFreshnessMetadata } from './signals/freshness.ts'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types

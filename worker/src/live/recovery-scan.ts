@@ -12,10 +12,12 @@ export interface LiveRecoveryCandidate {
   productId: string
   state: OrderState
   updatedAt: string
+  previousDiscoveryId?: string
   recoveryReason: 'EXPLICIT_RECOVERY_REQUIRED' | 'STALE_EXCHANGE_ACTIVE_ORDER'
 }
 
 interface LiveRecoveryCandidateRow {
+  predecessor?: string
   internal_order_id: string
   exchange_account_id: string
   exchange_order_id: string | null
@@ -67,21 +69,51 @@ export async function scanLiveOrdersForRecovery(
     staleBefore: string
     limit?: number
     exchangeAccountId?: string
+    excludeDiscovered?: boolean
   },
 ): Promise<readonly LiveRecoveryCandidate[]> {
   const staleBefore = validIso(input.staleBefore, 'staleBefore')
   const limit = boundedLimit(input.limit)
   const placeholders = EXCHANGE_ACTIVE_STATES.map(() => '?').join(', ')
   const exchangeAccountId = input.exchangeAccountId?.trim() || null
-  const accountFilter = exchangeAccountId ? ' AND exchange_account_id = ?' : ''
+  const accountFilter = exchangeAccountId ? ' AND live_orders.exchange_account_id = ?' : ''
+  // Select the most recent read for this exact persisted order identity. Only
+  // completed, nonterminal observations can be predecessors of a new attempt.
+  const priorJoin = input.excludeDiscovered ? ` LEFT JOIN live_queue_messages prior
+    ON prior.rowid = (SELECT q.rowid FROM live_queue_messages q
+     WHERE q.message_type = 'RECONCILE_ACCOUNT'
+       AND q.exchange_account_id = live_orders.exchange_account_id
+       AND json_extract(q.payload_json, '$.kind') = 'RECOVERY_DISCOVERY'
+       AND json_extract(q.payload_json, '$.plan.candidate.internalOrderId') = live_orders.internal_order_id
+       AND json_extract(q.payload_json, '$.plan.candidate.updatedAt') = live_orders.updated_at
+       AND json_extract(q.payload_json, '$.plan.candidate.state') = live_orders.state
+       AND json_extract(q.payload_json, '$.plan.candidate.productId') = live_orders.product_id
+       AND json_extract(q.payload_json, '$.plan.candidate.exchangeOrderId') IS live_orders.exchange_order_id
+       AND json_extract(q.payload_json, '$.plan.candidate.clientOrderId') IS live_orders.client_order_id
+      ORDER BY q.rowid DESC LIMIT 1)` : ''
+  const discoveryFilter = input.excludeDiscovered ? ` AND (prior.event_id IS NULL OR
+    (prior.status = 'COMPLETED' AND EXISTS (
+      SELECT 1 FROM live_queue_messages d WHERE d.message_type = 'NOTIFY_ALERT'
+        AND d.exchange_account_id = prior.exchange_account_id AND d.correlation_id = prior.correlation_id
+        AND json_extract(d.payload_json, '$.kind') = 'RECOVERY_RECONCILIATION_DECISION'
+        AND (json_extract(d.payload_json, '$.discoveryEventId') = prior.event_id
+          OR (json_type(d.payload_json, '$.discoveryEventId') IS NULL
+            AND d.rowid > prior.rowid AND NOT EXISTS (
+              SELECT 1 FROM live_queue_messages other
+              WHERE other.message_type = 'RECONCILE_ACCOUNT'
+                AND other.exchange_account_id = prior.exchange_account_id
+                AND other.correlation_id = prior.correlation_id AND other.event_id != prior.event_id
+                AND json_extract(other.payload_json, '$.kind') = 'RECOVERY_DISCOVERY')))
+        AND json_extract(d.payload_json, '$.decision.terminal') = 0)))` : ''
 
   const result = await env.DB.prepare(
-    `SELECT internal_order_id, exchange_account_id, exchange_order_id,
-            client_order_id, product_id, state, updated_at
-       FROM live_orders
+    `SELECT internal_order_id, live_orders.exchange_account_id, exchange_order_id,
+            client_order_id, product_id, state, live_orders.updated_at
+            ${input.excludeDiscovered ? ", prior.event_id AS predecessor" : ""}
+       FROM live_orders${priorJoin}
       WHERE (state = 'RECOVERY_REQUIRED'
-         OR (state IN (${placeholders}) AND updated_at <= ?))${accountFilter}
-      ORDER BY updated_at ASC, internal_order_id ASC
+         OR (state IN (${placeholders}) AND live_orders.updated_at <= ?))${accountFilter}${discoveryFilter}
+      ORDER BY live_orders.updated_at ASC, internal_order_id ASC
       LIMIT ?`,
   ).bind(
     ...EXCHANGE_ACTIVE_STATES,
@@ -91,6 +123,7 @@ export async function scanLiveOrdersForRecovery(
   ).all<LiveRecoveryCandidateRow>()
 
   return Object.freeze((result.results ?? []).map((row) => Object.freeze({
+    ...(row.predecessor ? { previousDiscoveryId: row.predecessor } : {}),
     internalOrderId: row.internal_order_id,
     exchangeAccountId: row.exchange_account_id,
     exchangeOrderId: row.exchange_order_id,

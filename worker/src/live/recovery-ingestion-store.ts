@@ -157,7 +157,8 @@ async function classifyFill(
       `recovered fill and accounting task are not paired: ${fillId}`,
     )
   }
-  if (existingFill.fill_hash !== fillHash || existingTask.fill_hash !== fillHash) {
+  if (existingFill.fill_hash !== fillHash || existingTask.fill_hash !== fillHash
+    || existingTask.task_intent_id !== plan.accountingTaskIntents.find(task => task.fillId === fillId)?.taskIntentId) {
     throw new RecoveryIngestionConflictError(`recovered fill hash conflicts: ${fillId}`)
   }
   if (
@@ -291,6 +292,11 @@ export async function persistBitgetRecoveryIngestion(
       task.fillHash,
       task.sequenceTimestamp,
     ))
+  }
+
+  for (const task of plan.accountingTaskIntents) {
+    statements.push(env.DB.prepare(`INSERT INTO live_recovery_task_memberships (ingestion_id, task_intent_id)
+      VALUES (?, ?)`).bind(plan.ingestionId, task.taskIntentId))
   }
 
   statements.push(env.DB.prepare(`

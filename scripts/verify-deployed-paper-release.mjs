@@ -1,7 +1,13 @@
+import { readFileSync } from 'node:fs'
+
 const DEFAULT_FRONTEND_URL = 'https://crypto-signal-bot-indol.vercel.app'
 const DEFAULT_BACKEND_URL = 'https://crypto-signal-bot-api.analyzer-d94.workers.dev'
-const RELEASE_CONTRACT = 'paper-certification-2026-09-05'
+const RELEASE_CONTRACT = JSON.parse(readFileSync(new URL('../public/release.json', import.meta.url), 'utf8')).release_contract
+if (typeof RELEASE_CONTRACT !== 'string' || !/^paper-certification-\d{4}-\d{2}-\d{2}$/.test(RELEASE_CONTRACT)) {
+  throw new Error('Committed release manifest must specify a paper certification contract')
+}
 const REQUEST_TIMEOUT_MS = 12_000
+const MAX_RESPONSE_BYTES = 64 * 1024
 
 function readArgument(name, fallback) {
   const index = process.argv.indexOf(name)
@@ -14,20 +20,36 @@ function readArgument(name, fallback) {
 const frontendUrl = readArgument('--frontend', DEFAULT_FRONTEND_URL)
 const backendUrl = readArgument('--backend', DEFAULT_BACKEND_URL)
 
+async function boundedFetch(url, init = {}) {
+  const response = await fetch(url, { ...init, redirect: 'error', signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) })
+  const declared = Number(response.headers.get('content-length'))
+  if (Number.isFinite(declared) && declared > MAX_RESPONSE_BYTES) throw new Error('response exceeds size limit')
+  if (!response.body) return { response, text: '' }
+  const reader = response.body.getReader()
+  const chunks = []
+  let bytes = 0
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      bytes += value.byteLength
+      if (bytes > MAX_RESPONSE_BYTES) throw new Error('response exceeds size limit')
+      chunks.push(value)
+    }
+  } finally {
+    await reader.cancel().catch(() => {})
+  }
+  return { response, text: new TextDecoder().decode(Buffer.concat(chunks.map((v) => Buffer.from(v)))) }
+}
+
 async function request(baseUrl, path, init = {}) {
-  const response = await fetch(new URL(path, `${baseUrl}/`), {
+  const { response, text } = await boundedFetch(new URL(path, `${baseUrl}/`), {
     ...init,
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     headers: { accept: 'application/json', ...(init.headers ?? {}) },
   })
-  const text = await response.text()
   let body
-  try {
-    body = text ? JSON.parse(text) : null
-  } catch {
-    body = null
-  }
-  return { response, body, text }
+  try { body = text ? JSON.parse(text) : null } catch { body = null }
+  return { response, body }
 }
 
 const checks = []
@@ -38,7 +60,7 @@ async function check(name, callback) {
     checks.push({ name, passed: true, detail })
     console.log(`PASS ${name}${detail ? ` — ${detail}` : ''}`)
   } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error)
+    const detail = error instanceof Error && error.message === 'response exceeds size limit' ? 'response exceeds size limit' : 'verification failed (details redacted)'
     checks.push({ name, passed: false, detail })
     console.error(`FAIL ${name} — ${detail}`)
   }
@@ -49,12 +71,12 @@ function assert(condition, message) {
 }
 
 await check('frontend release contract', async () => {
-  const { response, body, text } = await request(frontendUrl, '/release.json')
+  const { response, body } = await request(frontendUrl, '/release.json')
   assert(response.status === 200, `expected HTTP 200, received ${response.status}`)
-  assert(body, `expected JSON, received ${text.slice(0, 160)}`)
-  assert(body.release_contract === RELEASE_CONTRACT, `unexpected release contract ${body.release_contract ?? 'missing'}`)
+  assert(body, 'expected JSON response')
+  assert(body.release_contract === RELEASE_CONTRACT, 'release contract mismatch')
   assert(body.dashboard_path === '/dashboard', 'dashboard path must be /dashboard')
-  assert(body.backend_url === backendUrl, `frontend points to ${body.backend_url ?? 'no backend'}`)
+  assert(body.backend_url === backendUrl, 'frontend backend mismatch')
   assert(body.execution_exchange_primary === 'btcc', 'BTCC is not the primary execution exchange')
   assert(body.execution_exchange_secondary === 'bitget', 'Bitget is not the secondary execution exchange')
   assert(body.trading_mode === 'paper', 'frontend release is not paper-only')
@@ -66,8 +88,7 @@ await check('frontend release contract', async () => {
 })
 
 await check('frontend dashboard route', async () => {
-  const response = await fetch(new URL('/dashboard', `${frontendUrl}/`), { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) })
-  const html = await response.text()
+  const { response, text: html } = await boundedFetch(new URL('/dashboard', `${frontendUrl}/`))
   assert(response.status === 200, `expected HTTP 200, received ${response.status}`)
   assert(html.includes('Crypto Signal Bot V2'), 'dashboard SPA shell is missing the certification title')
   return '/dashboard is reachable'
@@ -76,7 +97,7 @@ await check('frontend dashboard route', async () => {
 await check('Worker health', async () => {
   const { response, body } = await request(backendUrl, '/healthz')
   assert(response.status === 200, `expected HTTP 200, received ${response.status}`)
-  assert(body?.status === 'ok', `unexpected health payload ${JSON.stringify(body)}`)
+  assert(body?.status === 'ok', 'unexpected health payload')
   assert(body?.execution_exchange_primary === 'btcc', 'Worker does not report BTCC as primary execution exchange')
   assert(body?.execution_exchange_secondary === 'bitget', 'Worker does not report Bitget as secondary execution exchange')
   return 'healthy; execution=btcc→bitget'
@@ -97,19 +118,19 @@ await check('Worker paper runtime locks', async () => {
 })
 
 await check('Worker v2 infrastructure contract', async () => {
-  const { response, body, text } = await request(backendUrl, '/v2/infrastructure/status')
-  assert(response.status === 200, `expected HTTP 200, received ${response.status}: ${text.slice(0, 160)}`)
+  const { response, body } = await request(backendUrl, '/v2/infrastructure/status')
+  assert(response.status === 200, `expected HTTP 200, received ${response.status}`)
   assert(body?.version === '2.0', 'v2 infrastructure payload is missing')
   assert(body?.runtime?.trading_mode === 'paper', 'v2 runtime is not paper')
   assert(body?.runtime?.allow_mainnet === false, 'v2 runtime allows mainnet')
   assert(body?.runtime?.live_trading_enabled === false, 'v2 runtime enables live trading')
   assert(body?.runtime?.withdrawals_enabled === false, 'v2 runtime enables withdrawals')
-  return `authority=${body?.fast_path?.authority ?? 'unknown'}`
+  return 'infrastructure contract verified'
 })
 
 await check('Worker agent context contract', async () => {
-  const { response, body, text } = await request(backendUrl, '/agent/context')
-  assert([200, 207].includes(response.status), `expected HTTP 200 or 207, received ${response.status}: ${text.slice(0, 160)}`)
+  const { response, body } = await request(backendUrl, '/agent/context')
+  assert([200, 207].includes(response.status), `expected HTTP 200 or 207, received ${response.status}`)
   assert(body?.certification_mode === true, 'certification_mode is not true')
   assert(body?.trading_mode === 'paper', 'agent context is not paper')
   assert(body?.network === 'testnet', 'agent context is not testnet')
